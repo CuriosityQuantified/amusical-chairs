@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Musical Chairs</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- join screen -->
+    <div id="screen-join" class="card center">
+      <h1>🎵 Musical Chairs</h1>
+      <p class="muted">When the music stops, play for your seat.</p>
+      <div class="row" style="margin-top:18px">
+        <input id="join-code" type="text" placeholder="ROOM CODE" maxlength="4" autocapitalize="characters"
+               autocomplete="off" style="text-transform:uppercase; letter-spacing:0.3em; text-align:center" />
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input id="join-name" type="text" placeholder="Your name" maxlength="20" autocomplete="off" />
+      </div>
+      <div style="margin-top:14px">
+        <button id="join-btn" class="big">Join</button>
+      </div>
+      <p id="join-error" class="muted" style="color:var(--bad)"></p>
+      <p class="muted" style="margin-top:26px"><a href="/host.html" style="color:var(--muted)">Host a game →</a></p>
+    </div>
+
+    <!-- main play area -->
+    <div id="screen-play" class="hidden">
+      <div class="row" style="justify-content:space-between; max-width:720px; margin:0 auto">
+        <strong id="me-name"></strong>
+        <span class="muted" id="room-label"></span>
+      </div>
+      <div id="banner"></div>
+      <div class="countdown hidden" id="countdown"><div id="countdown-bar"></div></div>
+      <div id="content" class="card"></div>
+      <div id="game-root"></div>
+    </div>
+
+    <!-- redemption fullscreen tap zone -->
+    <div id="tapzone" class="tapzone hidden">
+      <h1 id="tapzone-text">WAIT FOR GREEN</h1>
+      <p id="tapzone-sub">Tap anywhere or press any key the instant it turns green.</p>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/js/player.js"></script>
+</body>
+</html>

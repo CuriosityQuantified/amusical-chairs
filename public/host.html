@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Musical Chairs — Host</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪑</text></svg>" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div id="app" class="center">
+    <!-- create -->
+    <div id="screen-create" class="card center">
+      <h1>🎵 Musical Chairs — Host</h1>
+      <p class="muted">Project this screen in the room. Players join on their own devices.</p>
+      <button id="create-btn" class="big">Create Room</button>
+      <p id="create-error" class="muted" style="color:var(--bad)"></p>
+    </div>
+
+    <!-- lobby -->
+    <div id="screen-lobby" class="hidden">
+      <div class="card wide center">
+        <p class="muted" style="font-size:22px">Join at <strong id="join-url"></strong></p>
+        <div class="host-code" id="room-code"></div>
+        <img id="qr" class="qr" alt="QR code" />
+        <div class="ladder" id="lobby-ladder" style="margin-top:14px"></div>
+        <h3 style="margin-top:18px"><span id="player-count">0</span> players</h3>
+        <div class="joinlist" id="joinlist"></div>
+        <p class="muted" style="font-size:13px">Dot = clock-sync confidence: green good · yellow ok · red poor · grey disconnected</p>
+        <div style="margin-top:16px"><button id="start-btn" class="big">Start Game</button></div>
+      </div>
+      <div class="card wide">
+        <h3>Host config</h3>
+        <div class="config-grid">
+          <label>Minigames per round (m): <span id="cfg-m-val">2</span>
+            <input type="range" id="cfg-m" min="1" max="3" value="2" /></label>
+          <label>Minigame duration: <span id="cfg-dur-val">45</span>s
+            <input type="range" id="cfg-dur" min="20" max="90" value="45" /></label>
+          <label>Early-press penalty: <span id="cfg-pen-val">10</span>%
+            <input type="range" id="cfg-pen" min="0" max="50" value="10" /></label>
+          <label>Slingshot distance: <span id="cfg-sling-val">60</span> ft
+            <input type="range" id="cfg-sling" min="30" max="150" value="60" /></label>
+          <label><input type="checkbox" id="cfg-practice" checked /> Practice round first</label>
+        </div>
+        <h3 style="margin-top:14px">Games</h3>
+        <div class="game-toggles" id="game-toggles"></div>
+      </div>
+    </div>
+
+    <!-- running -->
+    <div id="screen-run" class="hidden">
+      <div class="row" style="justify-content:space-between; max-width:1100px; margin:0 auto">
+        <strong style="font-size:22px">Room <span id="run-code"></span></strong>
+        <div class="ladder" id="run-ladder"></div>
+        <button id="next-btn" class="secondary">Next ▸</button>
+      </div>
+      <div id="host-content" class="card wide"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/js/host.js"></script>
+</body>
+</html>

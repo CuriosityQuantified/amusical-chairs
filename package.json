@@ -1,0 +1,22 @@
+{
+  "name": "musical-chairs",
+  "version": "1.0.0",
+  "description": "Hybrid-meeting musical chairs: one host screen, N player devices, skill-scramble minigames.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  },
+  "license": "MIT"
+}
