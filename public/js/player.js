@@ -1,8 +1,10 @@
-// Player app shell: join/reconnect, clock sync, minigame lifecycle,
-// redemption participation, voting, results.
+// Player app shell: join/reconnect, clock sync, minigame lifecycle, the
+// musical-chairs finale, and per-game score reveals. No elimination — every
+// player plays every game and the highest total wins.
 
 import { syncClock } from '/js/sync.js';
 import { GameClients } from '/js/games.js';
+import { startChairs } from '/js/chairs.js';
 import { createRedemptionRun } from '/shared/redemption-core.js';
 
 const socket = io();
@@ -12,11 +14,11 @@ const state = {
   code: null,
   playerId: null,
   name: null,
-  eliminated: false,
   offset: 0,
-  game: null,          // { handle, deadline, key, submitted, timer }
+  game: null,          // { key, submitted }
   redemption: null,
-  votedOption: null,
+  solo: false,
+  roster: [],          // [{key, name, category}] — for the solo menu
 };
 
 // ---- join flow -------------------------------------------------------------
@@ -27,6 +29,7 @@ $('join-name').value = localStorage.getItem('mc_name') || '';
 
 $('join-btn').addEventListener('click', join);
 $('join-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+$('solo-btn').addEventListener('click', soloStart);
 
 function join() {
   const code = $('join-code').value.trim().toUpperCase();
@@ -35,19 +38,27 @@ function join() {
   if (!name) return showJoinError('Enter your name.');
   localStorage.setItem('mc_name', name);
   const storedPid = localStorage.getItem(`mc_pid_${code}`);
-  socket.emit('player:join', { code, name, playerId: storedPid }, async (res) => {
-    if (res.error) return showJoinError(res.error);
-    state.code = code;
-    state.playerId = res.playerId;
-    state.name = res.name;
-    localStorage.setItem(`mc_pid_${code}`, res.playerId);
-    $('screen-join').classList.add('hidden');
-    $('screen-play').classList.remove('hidden');
-    $('me-name').textContent = res.name;
-    $('room-label').textContent = `room ${code}`;
-    applySnapshot(res.snapshot);
-    await doSync();
-  });
+  socket.emit('player:join', { code, name, playerId: storedPid }, (res) => enterRoom(res, code));
+}
+
+function soloStart() {
+  const name = $('join-name').value.trim() || 'Solo';
+  localStorage.setItem('mc_name', name);
+  socket.emit('solo:create', { name }, (res) => enterRoom(res, res.snapshot?.code));
+}
+
+async function enterRoom(res, code) {
+  if (res.error) return showJoinError(res.error);
+  state.code = code;
+  state.playerId = res.playerId;
+  state.name = res.name;
+  localStorage.setItem(`mc_pid_${code}`, res.playerId);
+  $('screen-join').classList.add('hidden');
+  $('screen-play').classList.remove('hidden');
+  $('me-name').textContent = res.name;
+  $('room-label').textContent = res.snapshot?.solo ? 'solo practice' : `room ${code}`;
+  applySnapshot(res.snapshot);
+  await doSync();
 }
 
 function showJoinError(msg) { $('join-error').textContent = msg; }
@@ -59,7 +70,7 @@ async function doSync() {
 }
 
 socket.on('connect', () => {
-  // Transparent reconnect: rejoin with the stored playerId (spec §8).
+  // Transparent reconnect: rejoin with the stored playerId.
   if (state.code && state.playerId) {
     socket.emit('player:join', { code: state.code, name: state.name, playerId: state.playerId }, (res) => {
       if (res && res.ok) {
@@ -72,18 +83,53 @@ socket.on('connect', () => {
 
 function applySnapshot(snap) {
   if (!snap) return;
-  if (snap.you) state.eliminated = snap.you.eliminated;
+  state.solo = !!snap.solo;
+  if (snap.config?.roster) state.roster = snap.config.roster;
   if (snap.game) {
     startMinigame(snap.game);
-  } else if (snap.phase === 'voting' && snap.voting) {
-    renderVoting({ options: snap.voting.options });
+  } else if (snap.phase === 'scores' && snap.scores) {
+    renderScores({ leaderboard: snap.scores });
   } else if (snap.phase === 'winner' && snap.finalStandings) {
-    renderWinner({ standings: snap.finalStandings, winnerName: snap.finalStandings[0]?.name });
+    renderWinner({ standings: snap.finalStandings, winnerId: snap.winnerId, winnerName: snap.finalStandings[0]?.name });
   } else if (snap.phase === 'lobby') {
-    renderWaiting('You’re in! Waiting for the host to start…');
+    if (state.solo) renderSoloMenu();
+    else renderWaiting('You’re in! Waiting for the host to start…');
   } else {
     renderWaiting('Reconnected — waiting for the next phase…');
   }
+}
+
+// ---- solo practice menu ------------------------------------------------------
+
+function renderSoloMenu() {
+  clearAll();
+  banner('SOLO PRACTICE', '');
+  content().append(
+    el('h2', {}, 'Pick a game to play'),
+    el('p', { class: 'muted' }, 'Unscored practice — results show your raw metric.')
+  );
+  for (const g of state.roster) {
+    content().append(el('button', {
+      class: 'vote-option',
+      onclick: () => socket.emit('solo:play', { key: g.key }, (res) => {
+        if (res && res.error) alert(res.error);
+      }),
+    }, `▶ ${g.name}`));
+  }
+  content().append(el('button', {
+    class: 'vote-option',
+    onclick: () => socket.emit('solo:redemption', {}, (res) => {
+      if (res && res.error) alert(res.error);
+    }),
+  }, '🚨 Musical chairs — reaction round'));
+}
+
+function soloBackButton() {
+  return el('button', {
+    class: 'big',
+    style: 'margin-top:14px',
+    onclick: () => socket.emit('solo:menu', {}, () => {}),
+  }, 'Back to menu');
 }
 
 // ---- rendering helpers -----------------------------------------------------
@@ -149,19 +195,10 @@ function stopGameTimer() {
 
 function startMinigame(payload) {
   clearAll();
-  if (state.eliminated) {
-    banner('SPECTATING', '');
-    content().append(
-      el('h2', {}, `Round ${payload.round}: ${payload.gameName}`),
-      el('p', { class: 'muted' }, 'The survivors are playing. You vote on the next games after this round.'),
-      el('p', { class: 'muted', id: 'spec-progress' }, '')
-    );
-    return;
-  }
   const client = GameClients[payload.key];
   if (!client) return renderWaiting(`Unknown game ${payload.key}`);
   content().append(
-    el('h2', {}, (payload.practice ? '🧪 PRACTICE — ' : '') + payload.gameName),
+    el('h2', {}, (payload.practice ? '🧪 PRACTICE — ' : payload.test ? '🔧 TEST — ' : '') + payload.gameName),
     el('p', { class: 'muted' }, client.intro || '')
   );
   // Convert the server deadline to local time via the sync offset, then run
@@ -201,6 +238,22 @@ function startMinigame(payload) {
   }, msLeft);
 }
 
+// ---- per-game score reveal -------------------------------------------------
+
+function renderScores(p) {
+  clearAll();
+  const me = (p.leaderboard || []).find((r) => r.id === state.playerId);
+  if (!me) return renderWaiting('Scores are in.', 'Watch the host screen.');
+  banner(`#${me.rank} of ${p.leaderboard.length}`, me.rank === 1 ? 'safe' : '');
+  content().append(
+    el('h2', {}, `${p.gameName || 'Game'}: +${me.points} pts`),
+    el('p', { class: 'muted' }, `Your result: ${me.raw}`),
+    el('h2', {}, `Total: ${me.total} pts — #${me.rank} of ${p.leaderboard.length}`),
+    el('p', { class: 'muted' },
+      p.nextIsChairs ? 'Next up: MUSICAL CHAIRS — the finale!' : 'Next game starts soon…')
+  );
+}
+
 // ---- socket events ---------------------------------------------------------
 
 socket.on('room:players', () => {});
@@ -208,44 +261,58 @@ socket.on('room:players', () => {});
 socket.on('phase', (p) => {
   switch (p.name) {
     case 'lobby':
-      state.eliminated = false;
-      renderWaiting('New game! Waiting for the host to start…');
+      if (state.solo) renderSoloMenu();
+      else renderWaiting('New game! Waiting for the host to start…');
       break;
     case 'music':
       clearAll();
-      banner(p.final ? '🏆 FINAL' : `ROUND ${p.round}`);
+      banner(p.chairs ? '🪑 MUSICAL CHAIRS' : `GAME ${p.gameNumber || ''}${p.progress ? ` of ${p.progress.totalGames}` : ''}`);
       content().append(
         el('h2', { class: 'center' }, '🎵 Music is playing…'),
-        el('p', { class: 'muted center' }, 'When it stops: ' + (p.gameNames || []).join(' + '))
+        el('p', { class: 'muted center' },
+          p.chairs
+            ? 'The finale: fastest reaction wins the most points!'
+            : 'When it stops: ' + (p.gameNames || []).join(' + '))
       );
       break;
     case 'minigame':
       startMinigame(p);
       break;
     case 'practice_done':
-      renderWaiting('Practice over!', 'Host will start round 1 when everyone is ready.');
+      renderWaiting('Practice over!', 'Host will start the games when everyone is ready.');
       break;
-    case 'cut':
-      if (!state.eliminated) break; // players get personal you:cut below
-      renderWaiting('Scores are in…', 'Watch the host screen for the cut.');
+    case 'test_done': {
+      const mine = (p.results || []).find((r) => r.id === state.playerId);
+      clearAll();
+      content().append(
+        el('h2', {}, mine ? `🔧 ${p.gameName}: ${mine.raw}` : '🔧 Test over — no submission recorded.'),
+        el('p', { class: 'muted' }, 'Unscored practice run.')
+      );
+      if (state.solo) content().append(soloBackButton());
+      else content().append(el('p', { class: 'muted' }, 'Waiting for the host…'));
+      break;
+    }
+    case 'redemption_test_done': {
+      const mine = (p.results || []).find((r) => r.id === state.playerId);
+      clearAll();
+      const line = !mine ? 'No reaction recorded.'
+        : mine.status === 'ok'
+          ? `Your reaction: ${Math.round(mine.rawMs)} ms` +
+            (mine.earlyPresses ? ` (+${mine.earlyPresses} early press${mine.earlyPresses > 1 ? 'es' : ''} → ${mine.finalMs} ms)` : '')
+          : mine.status === 'postGreenTimeout' ? 'Too slow — the light was green!'
+          : mine.status === 'tooFast' ? 'Impossibly fast — disqualified.'
+          : 'You never saw green (kept pressing early).';
+      content().append(el('h2', {}, `🚨 ${line}`), el('p', { class: 'muted' }, 'Unscored practice run.'));
+      if (state.solo) content().append(soloBackButton());
+      break;
+    }
+    case 'scores':
+      renderScores(p);
       break;
     case 'redemption':
-      if (!p.participants.includes(state.playerId)) {
-        clearAll();
-        if (state.eliminated) renderWaiting('Redemption in progress…', 'Watch the host screen.');
-        else {
-          banner('SAFE', 'safe');
-          renderWaiting('You have a seat. 🎉', `${p.participantNames.length} players fight for ${p.saveCount} spot${p.saveCount > 1 ? 's' : ''}.`);
-        }
-      } else {
-        prepareRedemption(p);
-      }
-      break;
-    case 'reveal':
-      renderReveal(p);
-      break;
-    case 'voting':
-      renderVoting(p);
+      // Everyone plays the musical-chairs finale.
+      if (p.participants.includes(state.playerId)) prepareRedemption(p);
+      else renderWaiting('Musical chairs in progress…', 'Watch the host screen.');
       break;
     case 'winner':
       renderWinner(p);
@@ -258,35 +325,36 @@ socket.on('host:progress', ({ submitted, total }) => {
   if (elP) elP.textContent = `${submitted} of ${total} submitted`;
 });
 
-socket.on('you:cut', ({ status }) => {
-  clearAll();
-  if (status === 'safe') {
-    banner('SAFE', 'safe');
-    renderWaiting('Top half — you keep your seat this round.');
-  } else {
-    banner('AT RISK', 'risk');
-    renderWaiting('Bottom half. Get ready for redemption…', 'One of you gets saved. Fastest reaction wins.');
+// Personal score after each attempt (also fires for the chairs finale just
+// before the winner screen).
+socket.on('you:score', (s) => {
+  // The scores phase already renders the full card for minigames; this covers
+  // the chairs finale where the next phase is the winner screen.
+  if (s.gameName === 'Musical Chairs') {
+    renderWaiting(`🪑 Musical Chairs: ${s.raw} → +${s.points} pts`, `Total: ${s.total} pts`);
   }
-}
-);
-
-socket.on('you:eliminated', ({ place }) => {
-  state.eliminated = true;
-  banner('ELIMINATED', 'risk');
 });
 
-// ---- redemption ------------------------------------------------------------
+// ---- musical chairs (reaction) ---------------------------------------------
 
 async function prepareRedemption(p) {
   clearAll();
   content().classList.add('hidden');
-  // Re-sync before every redemption round (spec §5.2).
+  // Re-sync before the reaction round.
   await doSync();
   const tz = $('tapzone');
   tz.classList.remove('hidden', 'green');
   $('tapzone-text').textContent = 'WAIT FOR GREEN';
   $('tapzone-sub').textContent = 'Tap or press any key the instant it turns green. Too early = trouble.';
-  state.redemption = { armed: false };
+  // Everyone circles the chairs while waiting for the light.
+  const names = p.participantNames || [];
+  const anim = startChairs(tz, {
+    names,
+    chairs: Math.max(1, names.length - 1),
+    size: Math.min(300, Math.floor(window.innerHeight * 0.4)),
+  });
+  tz.insertBefore(anim.canvas, $('tapzone-text'));
+  state.redemption = { armed: false, anim };
 }
 
 socket.on('redemption:go', (p) => {
@@ -309,6 +377,8 @@ socket.on('redemption:go', (p) => {
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (t) => clearTimeout(t),
     requestPaint: (cb) => requestAnimationFrame((ts) => {
+      // Green = the music stopped: chairs vanish, just hit it.
+      state.redemption?.anim?.remove();
       tz.classList.add('green');
       $('tapzone-text').textContent = 'GO!';
       $('tapzone-sub').textContent = '';
@@ -342,6 +412,7 @@ socket.on('redemption:go', (p) => {
     tz.removeEventListener('pointerdown', press);
     document.removeEventListener('keydown', keyPress);
     tz.classList.remove('green');
+    state.redemption?.anim?.remove();
   }
   state.redemption.run = run;
 });
@@ -352,63 +423,22 @@ function clearAllButBanner() {
   hideCountdown();
 }
 
-// ---- reveal / voting / winner ------------------------------------------------
-
-function renderReveal(p) {
-  clearAll();
-  const me = p.leaderboard.find((r) => r.id === state.playerId);
-  if (state.eliminated && p.eliminatedNames && p.leaderboard.some((r) => r.id === state.playerId && r.status === 'eliminated')) {
-    banner('ELIMINATED', 'risk');
-    content().append(
-      el('h2', {}, 'The music stopped without you. 🪑'),
-      el('p', { class: 'muted' }, 'You now vote on the games the survivors must play. Choose cruelly.')
-    );
-  } else if (me) {
-    banner(me.status === 'saved' ? 'SAVED!' : 'SAFE', 'safe');
-    content().append(
-      el('h2', {}, `Round ${p.round}: #${me.rank} — ${me.total} pts`),
-      ...me.games.map((gm) => el('p', { class: 'muted' }, `${gm.name}: ${gm.raw} → ${gm.norm}`))
-    );
-  } else if (state.eliminated) {
-    renderWaiting('Round over.', 'Voting starts soon.');
-  }
-}
-
-function renderVoting(p) {
-  clearAll();
-  state.votedOption = null;
-  if (!state.eliminated) {
-    renderWaiting('You’re through! 🎉', 'The eliminated are choosing your next ordeal…');
-    return;
-  }
-  content().append(el('h2', {}, 'Pick the next games:'));
-  for (const opt of p.options) {
-    const btn = el('button', {
-      class: 'vote-option',
-      onclick: () => {
-        state.votedOption = opt.id;
-        socket.emit('player:vote', { optionId: opt.id });
-        [...content().querySelectorAll('.vote-option')].forEach((b) => b.classList.remove('chosen'));
-        btn.classList.add('chosen');
-      },
-    }, opt.games.map((g) => g.name).join(' + '));
-    content().append(btn);
-  }
-}
-
-socket.on('vote:result', ({ chosen }) => {
-  if (state.eliminated && chosen) {
-    renderWaiting('Vote locked in.', `Next: ${chosen.games.map((g) => g.name).join(' + ')}`);
-  }
-});
+// ---- winner ------------------------------------------------------------------
 
 function renderWinner(p) {
   clearAll();
   const iWon = p.winnerId ? p.winnerId === state.playerId : p.standings?.[0]?.id === state.playerId;
   banner(iWon ? '👑 YOU WIN!' : '🏁 GAME OVER', iWon ? 'safe' : '');
+  const myChairs = (p.chairsBoard || []).find((r) => r.id === state.playerId);
   const list = el('ol', {});
   for (const s of p.standings || []) {
-    list.append(el('li', s.id === state.playerId ? { style: 'font-weight:700' } : {}, `${s.name}`));
+    list.append(el('li', s.id === state.playerId ? { style: 'font-weight:700' } : {},
+      `${s.name} — ${s.total} pts`));
   }
-  content().append(el('h2', {}, `Winner: ${p.winnerName || '—'}`), list);
+  content().append(el('h2', {}, `Winner: ${p.winnerName || '—'}`));
+  if (myChairs) {
+    content().append(el('p', { class: 'muted' },
+      `Musical Chairs: ${myChairs.status === 'ok' ? `${myChairs.rawMs} ms` : myChairs.status} → +${myChairs.points} pts`));
+  }
+  content().append(list);
 }

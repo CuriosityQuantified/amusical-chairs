@@ -1,9 +1,12 @@
-// Room-level integration: exact tie at the cut line (§4.5) must send ALL
-// tied players to redemption — never a coin flip.
+// Room-level integration for the score-attack format: every enabled game is
+// played exactly once by everyone, scores are normalized 0–1000 per game and
+// accumulate, the musical-chairs reaction round is the scored finale, and the
+// highest total wins. Nobody is ever eliminated.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '../server/room.js';
+import { ROSTER } from '../server/games.js';
 
 const stubIo = () => ({ to: () => ({ emit: () => {} }) });
 
@@ -21,89 +24,122 @@ async function waitFor(fn, ms = 5000, label = 'condition') {
 function addPlayer(room, id, name) {
   room.players.set(id, {
     id, name, socketId: `sock-${id}`, connected: true,
-    disconnectedAt: null, eliminated: false, sync: null, joinedAt: Date.now(),
+    disconnectedAt: null, sync: null, joinedAt: Date.now(),
   });
 }
 
-test('integer tie at the cut line: all tied players go to redemption', async () => {
+// Enable only the given keys.
+function onlyGames(...keys) {
+  const enabled = {};
+  for (const g of ROSTER) enabled[g.key] = keys.includes(g.key);
+  return enabled;
+}
+
+const FAST = {
+  practice: false, gameDuration: 800, musicMs: 60,
+  redemptionPrepMs: 60, redemptionLeadMs: 120,
+  postGreenTimeout: 800, hardTimeout: 1500, closeGraceMs: 200,
+};
+
+test('score attack: every game once, totals accumulate, chairs finale, highest total wins', async () => {
   const room = new Room(stubIo(), 'TEST', {
-    m: 2, practice: false, gameDuration: 2000,
-    musicMs: 50, cutRevealMs: 50, redemptionPrepMs: 50, redemptionLeadMs: 100,
-    voteMs: 200, closeGraceMs: 100,
+    ...FAST,
+    enabled: onlyGames('spacemash', 'stopclock'),
   });
   try {
-    const ids = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+    const ids = ['p1', 'p2', 'p3'];
     ids.forEach((id, i) => addPlayer(room, id, `Player${i + 1}`));
-    room.pendingSet = ['spacemash', 'stopclock'];
-    room.startRound();
+    assert.equal(room.start().ok, true);
+    assert.equal(room.queue.length, 2, 'both enabled games queued once each');
+
+    const playedKeys = [];
+    const submitFor = (key, id, quality) => {
+      // quality: 0 = best, larger = worse
+      if (key === 'spacemash') room.handleSubmit(id, { count: 100 - quality * 20, flagged: false });
+      else room.handleSubmit(id, { best: 100 + quality * 150 });
+    };
+
+    // ---- game 1: p3 never submits ----
     await waitFor(() => room.phase === 'minigame', 3000, 'first minigame');
-    assert.equal(room.round.games[0].key, 'spacemash');
+    playedKeys.push(room.round.games[0].key);
+    submitFor(playedKeys[0], 'p1', 0);
+    submitFor(playedKeys[0], 'p2', 1);
+    await waitFor(() => room.phase === 'scores', 3000, 'first scores');
 
-    // Space Mash: integer press counts with a genuine tie (p3 and p4 at 80).
-    const counts = { p1: 100, p2: 90, p3: 80, p4: 80, p5: 70, p6: 60 };
-    for (const id of ids) room.handleSubmit(id, { count: counts[id], flagged: false });
+    const board1 = room.lastScores;
+    const row = (board, id) => board.find((r) => r.id === id);
+    assert.equal(row(board1, 'p1').points, 1000, 'best submitter gets 1000');
+    assert.equal(row(board1, 'p3').points, 0, 'non-submitter scores 0');
+    assert.ok(room.players.has('p3'), 'non-submitter is never removed');
+    assert.equal(row(board1, 'p1').rank, 1);
 
-    await waitFor(() => room.phase === 'minigame' && room.round.gameIndex === 1, 3000, 'second minigame');
-    // Stop the Clock: everyone identical → all normalized 1000, so the round
-    // ranking is decided purely by Space Mash, preserving the tie.
-    for (const id of ids) room.handleSubmit(id, { best: 500 });
+    // ---- game 2: everyone submits, p3 is best ----
+    room.hostNext();
+    await waitFor(() => room.phase === 'minigame', 3000, 'second minigame');
+    playedKeys.push(room.round.games[0].key);
+    submitFor(playedKeys[1], 'p1', 2);
+    submitFor(playedKeys[1], 'p2', 1);
+    submitFor(playedKeys[1], 'p3', 0);
+    await waitFor(() => room.phase === 'scores', 3000, 'second scores');
 
-    await waitFor(() => room.phase === 'redemption', 3000, 'redemption');
-    const split = room.round.split;
-    assert.equal(split.tieAtCut, true);
-    assert.ok(split.tied.includes('p3') && split.tied.includes('p4'),
-      'both tied players must be at risk');
-    assert.deepEqual(split.safe.sort(), ['p1', 'p2'], 'only strictly-above-cut players are safe');
-    assert.equal(split.risk.length, 4, 'tied pair + genuine bottom two');
+    assert.deepEqual([...playedKeys].sort(), ['spacemash', 'stopclock'],
+      'each enabled game played exactly once');
+    const board2 = room.lastScores;
+    assert.equal(row(board2, 'p3').points, 1000, 'p3 wins game 2');
+    for (const id of ids) {
+      assert.equal(row(board2, id).total,
+        row(board1, id).total + row(board2, id).points,
+        `${id} total accumulates across games`);
+    }
 
-    // Reports arrive; p3 is fastest and is the single player saved.
-    await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'redemption go');
-    room.handleRedemptionReport('p3', { status: 'ok', rawMs: 210, earlyPresses: 0 });
-    room.handleRedemptionReport('p4', { status: 'ok', rawMs: 300, earlyPresses: 0 });
-    room.handleRedemptionReport('p5', { status: 'ok', rawMs: 350, earlyPresses: 2 });
-    room.handleRedemptionReport('p6', { status: 'ok', rawMs: 400, earlyPresses: 0 });
+    // ---- musical chairs finale: all three participate, scored ----
+    room.hostNext();
+    await waitFor(() => room.phase === 'redemption', 3000, 'chairs finale');
+    assert.equal(room.redemption.participants.length, 3, 'everyone plays the finale');
+    assert.equal(room.redemption.mode, 'scored');
 
-    await waitFor(() => room.phase === 'reveal', 3000, 'reveal');
-    const alive = room.alive().map((p) => p.id).sort();
-    assert.deepEqual(alive, ['p1', 'p2', 'p3'], 'safe pair + the saved tied player survive');
-    assert.ok(room.players.get('p4').eliminated);
+    await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go');
+    room.handleRedemptionReport('p1', { status: 'ok', rawMs: 200, earlyPresses: 0 });
+    room.handleRedemptionReport('p2', { status: 'ok', rawMs: 300, earlyPresses: 0 });
+    room.handleRedemptionReport('p3', { status: 'ok', rawMs: 400, earlyPresses: 0 });
+
+    await waitFor(() => room.phase === 'winner', 3000, 'winner');
+    const standings = room.finalStandings;
+    assert.equal(standings.length, 3, 'all players in final standings — nobody eliminated');
+    for (let i = 1; i < standings.length; i++) {
+      assert.ok(standings[i - 1].total >= standings[i].total, 'standings sorted by total');
+    }
+    assert.equal(room.winnerId, standings[0].id);
+    // p1: 1000 + something + 1000 (fastest reaction) — must beat p3 who sat
+    // out game 1 (0 pts) and was slowest in the finale.
+    assert.ok(standings.findIndex((s) => s.id === 'p1') <
+              standings.findIndex((s) => s.id === 'p3'));
   } finally {
     room.destroy();
   }
 });
 
-test('non-submitters get normalized 0 but are NOT auto-eliminated before redemption (§4.6)', async () => {
+test('finale with no clean presses: chairs scores 0 for all, prior totals decide', async () => {
   const room = new Room(stubIo(), 'TESB', {
-    m: 1, practice: false, gameDuration: 400,
-    musicMs: 50, cutRevealMs: 50, redemptionPrepMs: 50, redemptionLeadMs: 100,
-    voteMs: 200, closeGraceMs: 100,
+    ...FAST,
+    enabled: onlyGames('stopclock'),
   });
   try {
-    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
-    ids.forEach((id, i) => addPlayer(room, id, `P${i}`));
-    room.pendingSet = ['stopclock'];
-    room.startRound();
+    addPlayer(room, 'a', 'Anna');
+    addPlayer(room, 'b', 'Ben');
+    room.start();
     await waitFor(() => room.phase === 'minigame', 3000, 'minigame');
-    // 'f' never submits (disconnect/idle). Others submit distinct errors.
     room.handleSubmit('a', { best: 100 });
-    room.handleSubmit('b', { best: 200 });
-    room.handleSubmit('c', { best: 300 });
-    room.handleSubmit('d', { best: 400 });
-    room.handleSubmit('e', { best: 500 });
-
-    await waitFor(() => room.phase === 'redemption', 4000, 'redemption');
-    const g = room.round.games[0];
-    assert.equal(g.normalized.get('f'), 0, 'non-submitter normalized to 0');
-    assert.ok(room.round.split.risk.includes('f'), 'non-submitter is at risk, not auto-out');
-    assert.equal(room.players.get('f').eliminated, false);
-
-    // The non-submitter wins redemption and survives the round.
+    room.handleSubmit('b', { best: 900 });
+    await waitFor(() => room.phase === 'scores', 3000, 'scores');
+    room.hostNext();
+    await waitFor(() => room.phase === 'redemption', 3000, 'finale');
     await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go');
-    room.handleRedemptionReport('f', { status: 'ok', rawMs: 180, earlyPresses: 0 });
-    room.handleRedemptionReport('d', { status: 'ok', rawMs: 280, earlyPresses: 0 });
-    room.handleRedemptionReport('e', { status: 'ok', rawMs: 320, earlyPresses: 0 });
-    await waitFor(() => room.phase === 'reveal', 3000, 'reveal');
-    assert.equal(room.players.get('f').eliminated, false, 'saved via redemption');
+    room.handleRedemptionReport('a', { status: 'hardTimeout', rawMs: null, earlyPresses: 40 });
+    room.handleRedemptionReport('b', { status: 'postGreenTimeout', rawMs: null, earlyPresses: 0 });
+    await waitFor(() => room.phase === 'winner', 3000, 'winner');
+    assert.equal(room.winnerId, 'a', 'game-1 leader wins when the finale scores nobody');
+    assert.equal(room.finalStandings.length, 2);
   } finally {
     room.destroy();
   }
