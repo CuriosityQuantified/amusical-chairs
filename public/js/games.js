@@ -294,6 +294,22 @@ function shapePath(shape, w, hgt) {
         });
       }
     }
+  } else if (shape === 'zigzag') {
+    const peaks = 5;
+    for (let i = 0; i <= 240; i++) {
+      const t = (i / 240) * peaks;
+      const x = 30 + (i / 240) * (w - 60);
+      const tri = 2 * Math.abs(t - Math.floor(t + 0.5)); // triangle wave 0..1
+      pts.push({ x, y: cy + (tri - 0.5) * (hgt - 90) });
+    }
+  } else if (shape === 'infinity') {
+    // Lemniscate of Bernoulli, scaled to the canvas.
+    const a = Math.min(w, hgt * 1.6) / 2 - 30;
+    for (let i = 0; i <= 260; i++) {
+      const th = (i / 260) * Math.PI * 2;
+      const d = 1 + Math.sin(th) * Math.sin(th);
+      pts.push({ x: cx + (a * Math.cos(th)) / d, y: cy + (a * 0.9 * Math.sin(th) * Math.cos(th)) / d });
+    }
   } else {
     for (let i = 0; i <= 240; i++) {
       const x = 30 + (i / 240) * (w - 60);
@@ -358,7 +374,7 @@ GameClients.dots = {
 // ---- 8. Stop the Clock -----------------------------------------------------
 
 GameClients.stopclock = {
-  intro: 'Stop the timer at exactly 10.000s. It disappears after 3 seconds. Two tries, best counts.',
+  intro: 'Stop the timer at exactly the target time shown. It disappears after 3 seconds. Two tries, best counts.',
   start(root, ctx) {
     const { targetMs, visibleMs, attempts } = ctx.data;
     const errors = [];
@@ -400,7 +416,7 @@ GameClients.stopclock = {
 // ---- 9. Grid Flash ---------------------------------------------------------
 
 GameClients.gridflash = {
-  intro: 'Eight cells light up for 4 seconds. Rebuild the pattern from memory. Two rounds.',
+  intro: 'Some cells light up for 4 seconds. Rebuild the pattern from memory. Two rounds.',
   start(root, ctx) {
     const { patterns, showMs } = ctx.data;
     const picks = [];
@@ -516,7 +532,7 @@ GameClients.typing = {
 // ---- 14. Space Mash --------------------------------------------------------
 
 GameClients.spacemash = {
-  intro: 'Mash SPACE or the button as fast as you can for 10 seconds. Holding a key does nothing.',
+  intro: 'Mash SPACE or the button as fast as you can until time runs out. Holding a key does nothing.',
   start(root, ctx) {
     const { activeMs, capPerSec } = ctx.data;
     const counter = createPressCounter({ capPerSec });

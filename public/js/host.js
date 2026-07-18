@@ -5,6 +5,7 @@
 
 import { syncClock } from '/js/sync.js';
 import { startChairs } from '/js/chairs.js';
+import { startTutorialAnim } from '/js/tutorials.js';
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
@@ -93,6 +94,8 @@ function buildConfigPanel() {
   const c = state.config;
   $('cfg-dur').value = Math.round(c.gameDuration / 1000);
   $('cfg-dur-val').textContent = Math.round(c.gameDuration / 1000);
+  $('cfg-tut').value = Math.round((c.tutorialMs ?? 9000) / 1000);
+  $('cfg-tut-val').textContent = Math.round((c.tutorialMs ?? 9000) / 1000);
   $('cfg-pen').value = Math.round(c.earlyPressPenalty * 100);
   $('cfg-pen-val').textContent = Math.round(c.earlyPressPenalty * 100);
   $('cfg-sling').value = c.slingshotDistance;
@@ -121,6 +124,7 @@ function buildConfigPanel() {
   }
 
   $('cfg-dur').oninput = (e) => { $('cfg-dur-val').textContent = e.target.value; pushConfig({ gameDuration: Number(e.target.value) * 1000 }); };
+  $('cfg-tut').oninput = (e) => { $('cfg-tut-val').textContent = e.target.value; pushConfig({ tutorialMs: Number(e.target.value) * 1000 }); };
   $('cfg-pen').oninput = (e) => { $('cfg-pen-val').textContent = e.target.value; pushConfig({ earlyPressPenalty: Number(e.target.value) / 100 }); };
   $('cfg-sling').oninput = (e) => { $('cfg-sling-val').textContent = e.target.value; pushConfig({ slingshotDistance: Number(e.target.value) }); };
   $('cfg-practice').onchange = (e) => pushConfig({ practice: e.target.checked });
@@ -149,7 +153,20 @@ socket.on('room:players', ({ players }) => {
     list.append(el('span', { class: 'chip' },
       el('span', { class: `dot ${dotCls}` }), p.name));
   }
+  renderHostLiveboard();
 });
+
+// Always-on leaderboard strip across the top of the running screen.
+function renderHostLiveboard() {
+  const lb = $('host-liveboard');
+  if (!lb) return;
+  const sorted = [...state.players].sort((a, b) => b.total - a.total);
+  lb.replaceChildren(el('span', { class: 'lb-title' }, '🏆'));
+  sorted.forEach((p, i) => {
+    lb.append(el('span', { class: 'lb-chip' + (i === 0 && p.total > 0 ? ' me' : '') },
+      `${i + 1}. ${p.name} · ${p.total}`));
+  });
+}
 
 function renderProgressInto(elm, progress) {
   elm.replaceChildren();
@@ -172,11 +189,16 @@ $('next-btn').addEventListener('click', () => socket.emit('host:next', {}, () =>
 
 const content = () => $('host-content');
 
+let hostTut = null;
+
 socket.on('phase', (p) => {
   state.phase = p.name;
+  hostTut?.stop();
+  hostTut = null;
   if (p.name !== 'lobby') {
     $('screen-lobby').classList.add('hidden');
     $('screen-run').classList.remove('hidden');
+    renderHostLiveboard();
   }
   if (p.progress) renderProgressInto($('run-ladder'), p.progress);
   switch (p.name) {
@@ -186,6 +208,7 @@ socket.on('phase', (p) => {
       renderLobbySummary();
       break;
     case 'music': renderMusic(p); break;
+    case 'tutorial': renderTutorial(p); break;
     case 'minigame': renderMinigame(p); break;
     case 'practice_done':
       content().replaceChildren(
@@ -257,6 +280,30 @@ function renderMusic(p) {
     const h = content().querySelector('h2');
     if (h) h.textContent = '🛑 THE MUSIC STOPPED!';
   }, Math.max(0, p.duration - 150));
+}
+
+// ---- pre-game tutorial ------------------------------------------------------
+
+function renderTutorial(p) {
+  const demo = el('div', { style: 'max-width:460px; margin:0 auto' });
+  content().replaceChildren(
+    el('h1', {}, `${p.chairs ? '🪑 ' : ''}Up next: ${p.gameName}`),
+    el('p', { class: 'muted', style: 'font-size:20px' }, 'How to play — watch the demo'),
+    demo,
+    el('p', { class: 'muted' }, 'Starting automatically… press Next ▸ to skip.')
+  );
+  hostTut = startTutorialAnim(demo, p.key);
+  const localDeadline = p.deadline - state.offset;
+  const bar = el('div', { class: 'countdown' }, el('div', { id: 'tut-bar' }));
+  content().append(bar);
+  const tick = () => {
+    const left = Math.max(0, localDeadline - Date.now());
+    const b = $('tut-bar');
+    if (!b) return;
+    b.style.width = `${(left / p.duration) * 100}%`;
+    if (left > 0 && state.phase === 'tutorial') requestAnimationFrame(tick);
+  };
+  tick();
 }
 
 // ---- minigame progress (count only, never live scores) ---------------------

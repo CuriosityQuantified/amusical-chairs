@@ -33,6 +33,7 @@ const TEST_CONFIG = {
   gameDuration: 900,
   practice: false,
   musicMs: 60,
+  tutorialMs: 50,
   redemptionPrepMs: 80,
   redemptionLeadMs: 200,
   postGreenTimeout: 800,
