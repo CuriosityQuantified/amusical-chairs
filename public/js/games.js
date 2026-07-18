@@ -266,10 +266,79 @@ function nearestDist(p, pts) {
   return Math.sqrt(best);
 }
 
+// Interpolate a closed polygon (corners in normalized [-1,1] coords) into a
+// dense polyline centered at (cx, cy) with scale s.
+function polygonPath(corners, cx, cy, s) {
+  const pts = [];
+  const closed = [...corners, corners[0]];
+  // ~200 samples total regardless of corner count, so the deviation metric
+  // is equally fine-grained on a triangle and a 12-corner cross.
+  const per = Math.max(8, Math.ceil(200 / corners.length));
+  for (let i = 0; i < closed.length - 1; i++) {
+    for (let k = 0; k < per; k++) {
+      const t = k / per;
+      pts.push({
+        x: cx + s * (closed[i][0] + (closed[i + 1][0] - closed[i][0]) * t),
+        y: cy + s * (closed[i][1] + (closed[i + 1][1] - closed[i][1]) * t),
+      });
+    }
+  }
+  pts.push({ x: cx + s * corners[0][0], y: cy + s * corners[0][1] });
+  return pts;
+}
+
+// Normalized corner lists ([-1,1] box, y down) for the polygon shapes.
+const SHAPE_CORNERS = {
+  triangle: [[0, -1], [1, 0.8], [-1, 0.8]],
+  square: [[-1, -1], [1, -1], [1, 1], [-1, 1]],
+  diamond: [[0, -1], [1, 0], [0, 1], [-1, 0]],
+  hourglass: [[-0.8, -1], [0.8, -1], [-0.8, 1], [0.8, 1]],
+  hexagon: [...Array(6)].map((_, i) => {
+    const th = -Math.PI / 2 + (i * Math.PI) / 3;
+    return [Math.cos(th), Math.sin(th)];
+  }),
+  bolt: [[0.35, -1], [-0.35, 0.05], [0.05, 0.05], [-0.35, 1], [0.35, -0.05], [-0.05, -0.05]],
+  arrow: [[-1, -0.35], [0.2, -0.35], [0.2, -0.75], [1, 0], [0.2, 0.75], [0.2, 0.35], [-1, 0.35]],
+  cross: [
+    [-0.33, -1], [0.33, -1], [0.33, -0.33], [1, -0.33], [1, 0.33], [0.33, 0.33],
+    [0.33, 1], [-0.33, 1], [-0.33, 0.33], [-1, 0.33], [-1, -0.33], [-0.33, -0.33],
+  ],
+};
+
 function shapePath(shape, w, hgt) {
   const cx = w / 2;
   const cy = hgt / 2;
   const pts = [];
+  if (SHAPE_CORNERS[shape]) {
+    return polygonPath(SHAPE_CORNERS[shape], cx, cy, Math.min(w, hgt) / 2 - 30);
+  }
+  if (shape === 'heart') {
+    // Classic parametric heart, then uniformly scaled + centered to fit.
+    const raw = [];
+    for (let i = 0; i <= 260; i++) {
+      const t = (i / 260) * Math.PI * 2;
+      raw.push({
+        x: 16 * Math.sin(t) ** 3,
+        y: -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)),
+      });
+    }
+    const xs = raw.map((p) => p.x);
+    const ys = raw.map((p) => p.y);
+    const bw = Math.max(...xs) - Math.min(...xs);
+    const bh = Math.max(...ys) - Math.min(...ys);
+    const s = Math.min((w - 60) / bw, (hgt - 60) / bh);
+    const mx = (Math.max(...xs) + Math.min(...xs)) / 2;
+    const my = (Math.max(...ys) + Math.min(...ys)) / 2;
+    return raw.map((p) => ({ x: cx + (p.x - mx) * s, y: cy + (p.y - my) * s }));
+  }
+  if (shape === 'circle') {
+    const R = Math.min(w, hgt) / 2 - 30;
+    for (let i = 0; i <= 240; i++) {
+      const th = -Math.PI / 2 + (i / 240) * Math.PI * 2;
+      pts.push({ x: cx + R * Math.cos(th), y: cy + R * Math.sin(th) });
+    }
+    return pts;
+  }
   if (shape === 'spiral') {
     for (let i = 0; i <= 260; i++) {
       const th = (i / 260) * 3.5 * Math.PI;
@@ -532,7 +601,7 @@ GameClients.typing = {
 // ---- 14. Space Mash --------------------------------------------------------
 
 GameClients.spacemash = {
-  intro: 'Mash SPACE or the button as fast as you can until time runs out. Holding a key does nothing.',
+  intro: 'Mash SPACE or the button as fast as you can for 10 seconds. Holding a key does nothing.',
   start(root, ctx) {
     const { activeMs, capPerSec } = ctx.data;
     const counter = createPressCounter({ capPerSec });

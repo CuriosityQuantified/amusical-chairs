@@ -45,11 +45,12 @@ Score attack — no elimination:
    other game.
 6. Highest cumulative total wins.
 
-Round content is randomized (seeded, identical for every player): Stop the
-Clock draws a random 6–12s target, Grid Flash varies pattern sizes, Space
-Mash varies its window, Slingshot jitters the distance ±25%, Trace picks
-from five shapes, and Read the Room draws from an **80-question humorous
-bank** (Typing Sprint from 30 sentences) with no repeats within a session.
+Round content is randomized **server-side** with a seeded RNG and broadcast
+to every player, so everyone always plays the identical configuration:
+Stop the Clock draws a random 6–10s target, Grid Flash varies pattern sizes
+(6–9 cells), Slingshot jitters the distance ±25%, Trace picks from 15
+shapes, and Read the Room draws from an **80-question humorous bank**
+(Typing Sprint from 30 sentences) with no repeats within a session.
 
 ## Anti-cheat details worth knowing
 

@@ -180,7 +180,14 @@ export function buildGameData(key, ctx) {
     }
     case 'trace':
       return {
-        clientData: { shape: pick(rng, ['spiral', 'star', 'wave', 'zigzag', 'infinity']), seed: `trace-${Math.floor(rng() * 1e9)}` },
+        clientData: {
+          shape: pick(rng, [
+            'spiral', 'star', 'wave', 'zigzag', 'infinity',
+            'heart', 'circle', 'triangle', 'square', 'diamond',
+            'hourglass', 'hexagon', 'bolt', 'arrow', 'cross',
+          ]),
+          seed: `trace-${Math.floor(rng() * 1e9)}`,
+        },
         secret: {},
       };
     case 'dots': {
@@ -188,9 +195,9 @@ export function buildGameData(key, ctx) {
       return { clientData: { counts, seed: `dots-${Math.floor(rng() * 1e9)}` }, secret: { counts } };
     }
     case 'stopclock': {
-      // Random target 6.0–12.0s (half-second steps) so nobody can pre-train
+      // Random target 6.0–10.0s (half-second steps) so nobody can pre-train
       // a single interval.
-      const targetMs = randInt(rng, 12, 24) * 500;
+      const targetMs = randInt(rng, 12, 20) * 500;
       return { clientData: { targetMs, visibleMs: 3000, attempts: 2 }, secret: {} };
     }
     case 'gridflash': {
@@ -208,8 +215,7 @@ export function buildGameData(key, ctx) {
       return { clientData: { sentence: SENTENCES[idx] }, secret: { sentence: SENTENCES[idx] } };
     }
     case 'spacemash':
-      // Random 8–12s window — the cap scales with it (see computeMetric).
-      return { clientData: { activeMs: randInt(rng, 8, 12) * 1000, capPerSec: 20 }, secret: {} };
+      return { clientData: { activeMs: 10000, capPerSec: 20 }, secret: {} };
     case 'slingshot': {
       // Jitter the host's base distance ±25% so range-finding stays a skill.
       const distance = clamp(Math.round(config.slingshotDistance * (0.75 + rng() * 0.5)), 30, 150);
