@@ -1,9 +1,14 @@
 // Room = one game session. All state is in-memory and ephemeral by design —
-// no database, no persistence (spec §1, §8).
+// no database, no persistence.
+//
+// Format: every player plays every enabled minigame once, then the
+// musical-chairs reaction round as the scored finale. No elimination — each
+// game is normalized 0–1000 across the players who played it and added to a
+// running total; highest total wins. Everyone sees their score after every
+// game.
 
 import crypto from 'node:crypto';
 import { seededRng, shuffle } from '../shared/rng.js';
-import { resolveRound, ladderFor, splitAtCut } from '../shared/ladder.js';
 import { normalizeError, normalizeScore } from '../shared/normalize.js';
 import { scoreRedemptionReport } from '../shared/redemption-core.js';
 import {
@@ -26,7 +31,6 @@ export function makeRoomCode(rng = Math.random) {
 }
 
 const DEFAULTS = {
-  m: 2,                    // minigames per round; hard-capped at 3 (spec §7)
   gameDuration: 45000,
   practice: true,
   minDelay: 2000,
@@ -35,13 +39,11 @@ const DEFAULTS = {
   postGreenTimeout: 10000,
   hardTimeout: 25000,
   slingshotDistance: 60,
-  // pacing knobs (host UI never exposes these below sane values; the low
-  // clamps exist so the bot harness can run a full game in seconds)
+  // pacing knobs (the low clamps exist so the bot harness can run a full
+  // game in seconds)
   musicMs: null,           // null = seeded 4–7s
-  cutRevealMs: 8000,
-  voteMs: 12000,
   redemptionPrepMs: 2500,  // client re-sync window before green is scheduled
-  redemptionLeadMs: 3000,  // T_green broadcast this far ahead (spec: 2–3s)
+  redemptionLeadMs: 3000,  // T_green broadcast this far ahead
   closeGraceMs: 1500,      // late-submission grace after a game's deadline
 };
 
@@ -51,7 +53,6 @@ function sanitizeConfig(raw = {}) {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
-  c.m = numIn(raw.m, 1, 3, DEFAULTS.m);
   c.gameDuration = numIn(raw.gameDuration, 500, 120000, DEFAULTS.gameDuration);
   c.practice = raw.practice != null ? !!raw.practice : DEFAULTS.practice;
   c.minDelay = numIn(raw.minDelay, 500, 10000, DEFAULTS.minDelay);
@@ -61,8 +62,6 @@ function sanitizeConfig(raw = {}) {
   c.hardTimeout = numIn(raw.hardTimeout, 1000, 60000, DEFAULTS.hardTimeout);
   c.slingshotDistance = numIn(raw.slingshotDistance, 30, 150, DEFAULTS.slingshotDistance);
   c.musicMs = raw.musicMs != null ? numIn(raw.musicMs, 50, 15000, null) : null;
-  c.cutRevealMs = numIn(raw.cutRevealMs, 50, 20000, DEFAULTS.cutRevealMs);
-  c.voteMs = numIn(raw.voteMs, 200, 30000, DEFAULTS.voteMs);
   c.redemptionPrepMs = numIn(raw.redemptionPrepMs, 50, 10000, DEFAULTS.redemptionPrepMs);
   c.redemptionLeadMs = numIn(raw.redemptionLeadMs, 100, 10000, DEFAULTS.redemptionLeadMs);
   c.closeGraceMs = numIn(raw.closeGraceMs, 0, 5000, DEFAULTS.closeGraceMs);
@@ -83,18 +82,18 @@ export class Room {
     this.hostSocketId = null;
     this.players = new Map(); // id -> player
     this.phase = 'lobby';
-    this.roundNumber = 0;
-    this.usedGames = new Set();
-    this.usedCategories = new Set();
-    this.usedContent = {};
-    this.round = null;
-    this.eliminationOrder = []; // first eliminated first
-    this.pendingSet = null;     // voted set of game keys for the next round
+    this.queue = [];          // game keys, each played exactly once
+    this.queueIndex = 0;
+    this.totals = new Map();  // playerId -> cumulative points
+    this.round = null;        // current single-game round (also practice/test)
+    this.lastScores = null;   // leaderboard rows from the last scored game
     this.redemption = null;
-    this.vote = null;
+    this.afterMusic = null;   // what the music phase leads into
     this.winnerId = null;
     this.finalStandings = null;
     this.timers = new Map();
+    this.solo = false;        // solo practice room: the lone player drives it
+    this.testCounter = 0;
     this.destroyed = false;
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
@@ -136,15 +135,19 @@ export class Room {
   setPhase(name, data = {}) {
     this.phase = name;
     this.lastActivity = Date.now();
-    this.emitAll('phase', { name, ...data, ladder: this.ladderInfo() });
+    this.emitAll('phase', { name, ...data, progress: this.progressInfo() });
   }
 
-  alive() { return [...this.players.values()].filter((p) => !p.eliminated); }
-  eliminated() { return [...this.players.values()].filter((p) => p.eliminated); }
+  alive() { return [...this.players.values()]; }
 
-  ladderInfo() {
-    const n = this.alive().length || this.players.size;
-    return { alive: n, predicted: n >= 2 ? ladderFor(n) : [n], round: this.roundNumber };
+  // Total events = every queued game + the musical-chairs finale.
+  progressInfo() {
+    const total = (this.queue.length || 0) + 1;
+    return {
+      players: this.players.size,
+      game: Math.min(this.queueIndex + 1, total),
+      totalGames: total,
+    };
   }
 
   playerSummaries() {
@@ -152,7 +155,7 @@ export class Room {
       id: p.id,
       name: p.name,
       connected: p.connected,
-      eliminated: p.eliminated,
+      total: Math.round(this.totals.get(p.id) || 0),
       sync: p.sync || null,
     }));
   }
@@ -165,8 +168,8 @@ export class Room {
 
   join(socket, { name, playerId }) {
     if (playerId && this.players.has(playerId)) {
-      // Reconnect: rebind socket, 30s+ grace means nobody was eliminated for
-      // a wifi hiccup (spec §8) — they simply may have missed submissions.
+      // Reconnect: rebind socket — nobody loses their identity or score for
+      // a wifi hiccup; they simply may have missed submissions.
       const p = this.players.get(playerId);
       p.socketId = socket.id;
       p.connected = true;
@@ -191,7 +194,6 @@ export class Room {
       socketId: socket.id,
       connected: true,
       disconnectedAt: null,
-      eliminated: false,
       sync: null,
       joinedAt: Date.now(),
     };
@@ -212,7 +214,7 @@ export class Room {
         p.connected = false;
         p.disconnectedAt = Date.now();
         // In the lobby a vanished player is removed after 60s; mid-game they
-        // are kept (P90 clamp on missed submissions, never auto-eliminated).
+        // are kept (missed submissions score 0, identity survives).
         if (this.phase === 'lobby') {
           this.setTimer(`kick:${pid}`, () => {
             if (this.phase === 'lobby' && this.players.get(pid) && !this.players.get(pid).connected) {
@@ -239,7 +241,7 @@ export class Room {
       minRtt: Math.max(0, Number(sync.minRtt) || 0),
       jitter: Math.max(0, Number(sync.jitter) || 0),
     };
-    // Per-player clock-sync confidence for the host screen (spec §5.2).
+    // Per-player clock-sync confidence for the host screen.
     p.sync.quality =
       p.sync.minRtt < 150 && p.sync.jitter < 60 ? 'good'
       : p.sync.minRtt < 400 && p.sync.jitter < 200 ? 'ok'
@@ -252,28 +254,30 @@ export class Room {
     const snap = {
       code: this.code,
       phase: this.phase,
+      solo: this.solo,
       players: this.playerSummaries(),
-      ladder: this.ladderInfo(),
+      progress: this.progressInfo(),
       config: this.publicConfig(),
-      you: p ? { id: p.id, name: p.name, eliminated: p.eliminated } : null,
+      you: p ? { id: p.id, name: p.name, total: Math.round(this.totals.get(p.id) || 0) } : null,
       winnerId: this.winnerId,
       finalStandings: this.finalStandings,
     };
     if ((this.phase === 'minigame' || this.phase === 'practice') && this.round) {
       const g = this.round.games[this.round.gameIndex];
-      if (g && p && !p.eliminated && !g.submissions.has(p.id)) {
+      if (g && p && !g.submissions.has(p.id)) {
         snap.game = this.gamePayload(g);
       }
     }
-    if (this.phase === 'voting' && this.vote) {
-      snap.voting = { options: this.vote.options, endsAt: this.vote.endsAt };
+    if (this.phase === 'scores' && this.lastScores) {
+      snap.scores = this.lastScores;
     }
     return snap;
   }
 
   publicConfig() {
-    const { m, gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
-    return { m, gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled };
+    const { gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
+    const roster = ROSTER.map(({ key, name, category }) => ({ key, name, category }));
+    return { gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled, roster };
   }
 
   updateConfig(raw) {
@@ -287,19 +291,23 @@ export class Room {
 
   start() {
     if (this.phase !== 'lobby') return { error: 'Already started.' };
-    if (this.players.size < 3) return { error: 'Need at least 3 players.' };
+    if (this.players.size < 2) return { error: 'Need at least 2 players.' };
+    const enabledKeys = ROSTER.filter((g) => this.config.enabled[g.key]).map((g) => g.key);
+    if (!enabledKeys.length) return { error: 'Enable at least one game.' };
+    this.queue = shuffle(seededRng(`${this.code}:queue`), enabledKeys);
+    this.queueIndex = 0;
+    this.totals = new Map([...this.players.keys()].map((id) => [id, 0]));
     if (this.config.practice) this.startPractice();
-    else this.startRound();
+    else this.nextGame();
     return { ok: true };
   }
 
   // Practice: one un-scored Stop the Clock so broken devices surface before
-  // round 1 (spec §9), not during it.
+  // the real games, not during them.
   startPractice() {
     const rng = seededRng(`${this.code}:practice`);
-    const { clientData, secret } = buildGameData('stopclock', { rng, config: this.config, used: this.usedContent });
+    const { clientData, secret } = buildGameData('stopclock', { rng, config: this.config, used: {} });
     this.round = {
-      number: 0,
       practice: true,
       games: [{
         key: 'stopclock', ...ROSTER_BY_KEY.get('stopclock'),
@@ -311,16 +319,65 @@ export class Room {
     const duration = Math.min(this.config.gameDuration, 30000);
     g.deadline = Date.now() + duration;
     this.setPhase('minigame', { ...this.gamePayload(g, duration), practice: true });
-    this.emitHost('host:progress', { submitted: 0, total: this.alive().length });
+    this.emitHost('host:progress', { submitted: 0, total: this.players.size });
     this.setTimer('game', () => this.closeGame(g.token), duration + this.config.closeGraceMs);
+  }
+
+  // Solo test: run any single game from the lobby, unscored, any player count
+  // (host playtesting). Uses a throwaway content pool — the real session's
+  // no-repeat pool is unaffected.
+  startTest(key) {
+    if (this.phase !== 'lobby') return { error: 'Games can only be tested from the lobby.' };
+    const meta = ROSTER_BY_KEY.get(key);
+    if (!meta) return { error: `Unknown game "${key}".` };
+    if (this.players.size < 1) return { error: 'Need at least 1 player joined to test.' };
+    this.testCounter += 1;
+    const { clientData, secret } = buildGameData(key, {
+      rng: seededRng(`${this.code}:test:${key}:${this.testCounter}`),
+      config: this.config,
+      used: {},
+    });
+    this.round = {
+      practice: false,
+      test: true,
+      games: [{
+        ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID(),
+      }],
+      gameIndex: 0,
+      extras: {},
+    };
+    const g = this.round.games[0];
+    g.deadline = Date.now() + this.config.gameDuration;
+    this.setPhase('minigame', this.gamePayload(g));
+    this.emitHost('host:progress', { submitted: 0, total: this.players.size });
+    this.setTimer('game', () => this.closeGame(g.token), this.config.gameDuration + this.config.closeGraceMs);
+    return { ok: true };
+  }
+
+  // The "musical chairs" moment itself, solo: a full reaction round with
+  // everyone present as participants. Unscored, nothing at stake.
+  startRedemptionTest() {
+    if (this.phase !== 'lobby') return { error: 'Finish the current game first.' };
+    if (this.players.size < 1) return { error: 'Need at least 1 player joined to test.' };
+    this.round = null;
+    this.startRedemption([...this.players.keys()], 'test');
+    return { ok: true };
+  }
+
+  backToLobby() {
+    this.clearTimer('game');
+    this.clearTimer('redemption');
+    this.round = null;
+    this.redemption = null;
+    this.setPhase('lobby', {});
+    this.broadcastPlayers();
+    return { ok: true };
   }
 
   gamePayload(g, duration) {
     const dur = duration ?? this.config.gameDuration;
     return {
-      round: this.round.number,
-      gameIndex: this.round.gameIndex,
-      gameCount: this.round.games.length,
+      gameNumber: this.queueIndex + 1,
       key: g.key,
       gameName: g.name,
       gameType: g.type,
@@ -329,129 +386,55 @@ export class Room {
       duration: dur,
       deadline: g.deadline ?? Date.now() + dur,
       practice: !!this.round.practice,
+      test: !!this.round.test,
     };
   }
 
-  startRound() {
-    const alive = this.alive();
-    const resolve = resolveRound(alive.length);
-    if (resolve.type === 'FINAL') return this.startFinal();
-    this.roundNumber++;
-    const keys = this.takeGameSet(this.config.m);
-    const rng = seededRng(`${this.code}:r${this.roundNumber}`);
-    this.round = {
-      number: this.roundNumber,
-      practice: false,
-      final: false,
-      resolve,
-      games: keys.map((key) => {
-        const meta = ROSTER_BY_KEY.get(key);
-        const { clientData, secret } = buildGameData(key, {
-          rng: seededRng(`${this.code}:r${this.roundNumber}:${key}`),
-          config: this.config,
-          used: this.usedContent,
-        });
-        return { ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID() };
-      }),
-      gameIndex: -1,
-      extras: {},
-    };
+  // Music plays (avatars circle the chairs on the host screen), then the
+  // next event starts. The host can skip the music with Next.
+  playMusicThen(data, fn) {
+    const rng = seededRng(`${this.code}:music:${this.queueIndex}`);
     const musicMs = this.config.musicMs ?? 4000 + Math.floor(rng() * 3000);
-    this.setPhase('music', {
-      duration: musicMs,
-      round: this.roundNumber,
-      gameNames: this.round.games.map((g) => g.name),
-      atStake: resolve,
-    });
-    this.setTimer('music', () => this.startGame(0), musicMs);
+    this.afterMusic = fn;
+    this.setPhase('music', { duration: musicMs, ...data });
+    this.setTimer('music', fn, musicMs);
   }
 
-  startFinal() {
-    this.roundNumber++;
-    const keys = this.takeGameSet(1);
-    const meta = ROSTER_BY_KEY.get(keys[0]);
-    const { clientData, secret } = buildGameData(keys[0], {
-      rng: seededRng(`${this.code}:final:${keys[0]}`),
+  nextGame() {
+    if (this.queueIndex >= this.queue.length) return this.startChairsFinale();
+    const key = this.queue[this.queueIndex];
+    const meta = ROSTER_BY_KEY.get(key);
+    const { clientData, secret } = buildGameData(key, {
+      rng: seededRng(`${this.code}:g${this.queueIndex}:${key}`),
       config: this.config,
-      used: this.usedContent,
+      used: this.usedContent || (this.usedContent = {}),
     });
     this.round = {
-      number: this.roundNumber,
       practice: false,
-      final: true,
       games: [{ ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID() }],
-      gameIndex: -1,
+      gameIndex: 0,
       extras: {},
     };
-    const rng = seededRng(`${this.code}:finalmusic`);
-    const musicMs = this.config.musicMs ?? 4000 + Math.floor(rng() * 3000);
-    this.setPhase('music', {
-      duration: musicMs,
-      round: this.roundNumber,
-      final: true,
-      finalists: this.alive().map((p) => p.name),
-      gameNames: [meta.name],
-    });
-    this.setTimer('music', () => this.startGame(0), musicMs);
-  }
-
-  // Selection rule (spec §6.1): never repeat a game in a session, never two
-  // games of one category in a round, prefer unused categories. Repeats are
-  // allowed only if the roster is genuinely exhausted.
-  drawSet(m, rng) {
-    let pool = ROSTER.filter((g) => this.config.enabled[g.key] && !this.usedGames.has(g.key));
-    const cats = new Set(pool.map((g) => g.category));
-    if (cats.size < Math.min(m, 1) || pool.length < m) {
-      pool = ROSTER.filter((g) => this.config.enabled[g.key]);
-      if (!pool.length) pool = [...ROSTER];
-    }
-    const byCat = new Map();
-    for (const g of pool) {
-      if (!byCat.has(g.category)) byCat.set(g.category, []);
-      byCat.get(g.category).push(g);
-    }
-    const unusedCats = shuffle(rng, [...byCat.keys()].filter((c) => !this.usedCategories.has(c)));
-    const usedCats = shuffle(rng, [...byCat.keys()].filter((c) => this.usedCategories.has(c)));
-    const order = [...unusedCats, ...usedCats];
-    const picked = [];
-    for (const cat of order) {
-      if (picked.length >= m) break;
-      const options = byCat.get(cat);
-      picked.push(options[Math.floor(rng() * options.length)].key);
-    }
-    return picked;
-  }
-
-  takeGameSet(m) {
-    let keys;
-    if (this.pendingSet && this.pendingSet.length) {
-      keys = this.pendingSet.slice(0, m);
-      this.pendingSet = null;
-    } else {
-      keys = this.drawSet(m, seededRng(`${this.code}:draw:${this.roundNumber}:${this.usedGames.size}`));
-    }
-    if (!keys.length) keys = [ROSTER[0].key];
-    for (const k of keys) {
-      this.usedGames.add(k);
-      this.usedCategories.add(ROSTER_BY_KEY.get(k).category);
-    }
-    return keys;
+    this.playMusicThen(
+      { gameNames: [meta.name], gameNumber: this.queueIndex + 1 },
+      () => this.startGame(0)
+    );
   }
 
   startGame(idx) {
     const g = this.round.games[idx];
-    if (!g) return this.scoreRound();
+    if (!g) return;
     this.round.gameIndex = idx;
     g.deadline = Date.now() + this.config.gameDuration;
     this.setPhase('minigame', this.gamePayload(g));
-    this.emitHost('host:progress', { submitted: 0, total: this.alive().length });
+    this.emitHost('host:progress', { submitted: 0, total: this.players.size });
     this.setTimer('game', () => this.closeGame(g.token), this.config.gameDuration + this.config.closeGraceMs);
   }
 
   handleSubmit(playerId, payload) {
     if (this.phase !== 'minigame') return;
     const p = this.players.get(playerId);
-    if (!p || p.eliminated) return;
+    if (!p) return;
     const g = this.round.games[this.round.gameIndex];
     if (!g || g.submissions.has(playerId)) return;
     g.submissions.set(playerId, payload ?? {});
@@ -459,15 +442,12 @@ export class Room {
       const metric = computeMetric(g.key, payload, g.secret, g.clientData, this.config);
       if (metric != null) g.metrics.set(playerId, metric);
     }
-    const aliveCount = this.alive().length;
-    const submitted = [...g.submissions.keys()].filter((id) => {
-      const pl = this.players.get(id);
-      return pl && !pl.eliminated;
-    }).length;
-    // Progress count only — never live scores (spec §8.1).
-    this.emitAll('host:progress', { submitted, total: aliveCount });
+    const total = this.players.size;
+    const submitted = g.submissions.size;
+    // Progress count only — never live scores.
+    this.emitAll('host:progress', { submitted, total });
     this.emitPlayer(playerId, 'submit:ack', { gameIndex: this.round.gameIndex });
-    if (submitted >= aliveCount) this.closeGame(g.token);
+    if (submitted >= total) this.closeGame(g.token);
   }
 
   closeGame(token) {
@@ -479,109 +459,94 @@ export class Room {
       const entries = [...g.submissions.entries()].map(([playerId, payload]) => ({ playerId, payload }));
       const { metrics, extra } = aggregateGame(g.key, entries);
       g.metrics = metrics;
-      this.round.extras[g.key] = extra;
+      if (this.round.extras) this.round.extras[g.key] = extra;
     }
-    if (this.round.practice) {
-      this.setPhase('practice_done', { submitted: g.submissions.size, total: this.alive().length });
+    if (this.round.test) {
+      // Raw metric per player, no normalization — solo results would all
+      // normalize to the same score anyway.
+      const results = [...this.players.values()]
+        .filter((p) => g.submissions.has(p.id))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          raw: formatRaw(g.key, g.metrics.get(p.id) ?? null, g.submissions.get(p.id)),
+          metric: g.metrics.get(p.id) ?? null,
+        }));
+      this.setPhase('test_done', {
+        key: g.key,
+        gameName: g.name,
+        results,
+        total: this.players.size,
+        extras: this.round.extras,
+      });
       return;
     }
-    const next = this.round.gameIndex + 1;
-    if (next < this.round.games.length) this.startGame(next);
-    else this.scoreRound();
+    if (this.round.practice) {
+      this.setPhase('practice_done', { submitted: g.submissions.size, total: this.players.size });
+      return;
+    }
+    this.scoreGame(g);
   }
 
-  // Normalization per spec §4: each game independently, within the round,
-  // across only the players who played it, 0–1000. Non-submitters get 0.
-  computeRoundScores() {
-    const alive = this.alive();
-    for (const g of this.round.games) {
-      const submitters = alive.filter((p) => g.metrics.has(p.id));
-      const values = submitters.map((p) => g.metrics.get(p.id));
-      const normalized = values.length
-        ? (g.type === 'error' ? normalizeError(values) : normalizeScore(values))
-        : [];
-      g.normalized = new Map();
-      submitters.forEach((p, i) => g.normalized.set(p.id, normalized[i]));
-      for (const p of alive) if (!g.normalized.has(p.id)) g.normalized.set(p.id, 0);
+  // Normalize this game 0–1000 across the players who played it, add to the
+  // running totals, and show everyone where they stand. Non-submitters get 0.
+  scoreGame(g) {
+    const players = [...this.players.values()];
+    const submitters = players.filter((p) => g.metrics.has(p.id));
+    const values = submitters.map((p) => g.metrics.get(p.id));
+    const normalized = values.length
+      ? (g.type === 'error' ? normalizeError(values) : normalizeScore(values))
+      : [];
+    const points = new Map();
+    submitters.forEach((p, i) => points.set(p.id, normalized[i]));
+    for (const p of players) {
+      if (!points.has(p.id)) points.set(p.id, 0);
+      this.totals.set(p.id, (this.totals.get(p.id) || 0) + points.get(p.id));
     }
-    const ranking = alive
+    const rows = players
       .map((p) => ({
         id: p.id,
-        total: this.round.games.reduce((s, g) => s + g.normalized.get(p.id), 0),
+        name: p.name,
+        raw: formatRaw(g.key, g.metrics.get(p.id) ?? null, g.submissions.get(p.id)),
+        points: Math.round(points.get(p.id)),
+        total: Math.round(this.totals.get(p.id)),
       }))
-      .sort((a, b) => b.total - a.total);
-    this.round.ranking = ranking;
-    return ranking;
-  }
-
-  leaderboardRows(ranking) {
-    return ranking.map((r, i) => {
-      const p = this.players.get(r.id);
-      return {
-        rank: i + 1,
-        id: r.id,
-        name: p ? p.name : '?',
-        total: Math.round(r.total),
-        games: this.round.games.map((g) => ({
-          key: g.key,
-          name: g.name,
-          norm: Math.round(g.normalized.get(r.id) ?? 0),
-          raw: formatRaw(g.key, g.metrics.get(r.id) ?? null, g.submissions.get(r.id)),
-        })),
-      };
-    });
-  }
-
-  scoreRound() {
-    if (this.round.final) return this.scoreFinal();
-    const ranking = this.computeRoundScores();
-    const resolve = this.round.resolve;
-    const split = splitAtCut(ranking, resolve.safeCount);
-    this.round.split = split;
-    const nameOf = (id) => this.players.get(id)?.name || '?';
-
-    if (resolve.redemption) {
-      // Bottom half (plus anyone tied at the cut, §4.5) go to redemption;
-      // exactly one is saved.
-      this.round.pendingEliminations = [];
-      this.showCutThen(split, () => this.startRedemption(split.risk, 1, 'round'));
-    } else if (split.tieAtCut) {
-      // No redemption this round (bottom < 3), but a tie spans the cut line.
-      // Never a coin flip: the tied players contest the remaining safe seats
-      // with a reaction tiebreak; everyone strictly below is out regardless.
-      const seats = resolve.safeCount - split.safe.length;
-      this.round.pendingEliminations = split.below;
-      this.showCutThen(split, () => this.startRedemption(split.tied, seats, 'cut-tiebreak'));
-    } else {
-      this.round.pendingEliminations = split.risk;
-      this.round.redemptionResult = null;
-      this.showCutThen(split, () => this.finishRoundReveal([]));
-    }
-  }
-
-  showCutThen(split, next) {
-    const rows = this.leaderboardRows(this.round.ranking);
-    this.setPhase('cut', {
-      round: this.round.number,
+      .sort((a, b) => b.total - a.total)
+      .map((r, i) => ({ ...r, rank: i + 1 }));
+    this.lastScores = rows;
+    this.queueIndex++;
+    this.setPhase('scores', {
+      key: g.key,
+      gameName: g.name,
+      gameNumber: this.queueIndex,       // the game just finished
       leaderboard: rows,
-      safeIds: split.safe,
-      riskIds: split.risk,
-      tieAtCut: split.tieAtCut,
-      willRedeem: this.round.resolve?.redemption || split.tieAtCut,
+      nextIsChairs: this.queueIndex >= this.queue.length,
       extras: this.round.extras,
     });
-    for (const id of split.safe) this.emitPlayer(id, 'you:cut', { status: 'safe' });
-    for (const id of split.risk) this.emitPlayer(id, 'you:cut', { status: 'risk' });
-    this.setTimer('cut', next, this.config.cutRevealMs);
+    for (const r of rows) {
+      this.emitPlayer(r.id, 'you:score', {
+        gameName: g.name, raw: r.raw, points: r.points, total: r.total,
+        rank: r.rank, of: rows.length,
+      });
+    }
+    this.broadcastPlayers();
+    // Host advances from scores (host:next) → next game / chairs finale.
   }
 
-  // ---- redemption ---------------------------------------------------------
+  // ---- musical chairs finale ----------------------------------------------
 
-  startRedemption(participantIds, saveCount, mode) {
+  startChairsFinale() {
+    this.round = null;
+    this.playMusicThen(
+      { gameNames: ['Musical Chairs'], gameNumber: this.queue.length + 1, chairs: true },
+      () => this.startRedemption([...this.players.keys()], 'scored')
+    );
+  }
+
+  startRedemption(participantIds, mode) {
     const c = this.config;
     this.redemption = {
       participants: participantIds,
-      saveCount: Math.max(1, Math.min(saveCount, Math.max(1, participantIds.length - 1))),
       mode,
       reports: new Map(),
       tGreen: null,
@@ -591,12 +556,12 @@ export class Room {
     this.setPhase('redemption', {
       participants: participantIds,
       participantNames: names,
-      saveCount: this.redemption.saveCount,
       mode,
+      scored: mode === 'scored',
       prepMs: c.redemptionPrepMs,
     });
-    // Give clients a resync window (spec §5.2: re-sync before each redemption
-    // round), then broadcast the absolute server-time T_green 2–3s ahead.
+    // Give clients a resync window, then broadcast the absolute server-time
+    // T_green a couple of seconds ahead.
     this.setTimer('redemption', () => {
       if (!this.redemption) return;
       const tGreen = Date.now() + c.redemptionLeadMs;
@@ -619,8 +584,8 @@ export class Room {
     if (!red || !red.tGreen) return;
     if (!red.participants.includes(playerId) || red.reports.has(playerId)) return;
     const scored = scoreRedemptionReport(report, { earlyPressPenalty: this.config.earlyPressPenalty });
-    // Server-side sanity (spec §5.2 step 6): a clean (no-early-press) report
-    // should arrive roughly rtt after T_green + reportedTime. Flag, don't crash.
+    // Server-side sanity: a clean (no-early-press) report should arrive
+    // roughly rtt after T_green + reportedTime. Flag, don't crash.
     const p = this.players.get(playerId);
     if (scored.status === 'ok' && scored.earlyPresses === 0) {
       const rtt = p?.sync?.minRtt ?? 200;
@@ -643,204 +608,80 @@ export class Room {
       return { id, name: this.players.get(id)?.name || '?', order: i, ...scored };
     });
     results.sort((a, b) => a.finalMs - b.finalMs || a.order - b.order);
-    const saved = results.slice(0, red.saveCount).map((r) => r.id);
-    const eliminatedNow = results.slice(red.saveCount).map((r) => r.id);
-    const redemptionResult = {
-      mode: red.mode,
-      saveCount: red.saveCount,
-      savedIds: saved,
-      results: results.map((r) => ({
-        id: r.id, name: r.name, status: r.status, rawMs: r.rawMs,
-        earlyPresses: r.earlyPresses, finalMs: Math.round(r.finalMs),
-        flagged: r.flagged, saved: saved.includes(r.id),
-      })),
-    };
-    if (red.mode === 'final-tiebreak') {
-      this.round.redemptionResult = redemptionResult;
-      return this.declareWinner(saved[0], redemptionResult);
-    }
-    this.round.redemptionResult = redemptionResult;
-    this.finishRoundReveal(eliminatedNow);
-  }
 
-  // ---- reveal / voting ----------------------------------------------------
-
-  finishRoundReveal(redemptionEliminated) {
-    const toEliminate = [...(this.round.pendingEliminations || []), ...redemptionEliminated];
-    for (const id of toEliminate) {
-      const p = this.players.get(id);
-      if (p && !p.eliminated) {
-        p.eliminated = true;
-        this.eliminationOrder.push(id);
-        this.emitPlayer(id, 'you:eliminated', {
-          round: this.round.number,
-          place: this.players.size - this.eliminationOrder.length + 1,
-        });
-      }
-    }
-    const rows = this.leaderboardRows(this.round.ranking).map((row) => ({
-      ...row,
-      status: toEliminate.includes(row.id)
-        ? 'eliminated'
-        : this.round.redemptionResult?.savedIds?.includes(row.id)
-          ? 'saved'
-          : 'safe',
-    }));
-    this.setPhase('reveal', {
-      round: this.round.number,
-      leaderboard: rows,
-      redemption: this.round.redemptionResult,
-      eliminatedNames: toEliminate.map((id) => this.players.get(id)?.name || '?'),
-      aliveCount: this.alive().length,
-      nextIsFinal: resolveRound(this.alive().length).type === 'FINAL',
-      extras: this.round.extras,
-    });
-    this.broadcastPlayers();
-    // Host advances from reveal (host:next) → voting.
-  }
-
-  // Eliminated players pick the next round's minigame set (spec §8.3).
-  startVoting() {
-    const alive = this.alive();
-    if (alive.length <= 1) return this.declareWinner(alive[0]?.id || null, null);
-    const nextM = resolveRound(alive.length).type === 'FINAL' ? 1 : this.config.m;
-    const rng = seededRng(`${this.code}:vote:${this.roundNumber}`);
-    const options = [];
-    const seen = new Set();
-    for (let attempt = 0; attempt < 10 && options.length < 3; attempt++) {
-      const keys = this.drawSet(nextM, seededRng(`${this.code}:vote:${this.roundNumber}:${attempt}`));
-      if (!keys.length) continue;
-      const sig = keys.slice().sort().join('+');
-      if (seen.has(sig)) continue;
-      seen.add(sig);
-      options.push({
-        id: options.length,
-        games: keys.map((k) => ({ key: k, name: ROSTER_BY_KEY.get(k).name, category: ROSTER_BY_KEY.get(k).category })),
+    if (red.mode === 'test') {
+      // Solo/test run: show reaction results, nothing at stake.
+      this.setPhase('redemption_test_done', {
+        results: results.map((r) => ({
+          id: r.id, name: r.name, status: r.status, rawMs: r.rawMs,
+          earlyPresses: r.earlyPresses, finalMs: Math.round(r.finalMs), flagged: r.flagged,
+        })),
       });
-    }
-    const voters = this.eliminated().filter((p) => p.connected);
-    this.vote = {
-      options,
-      votes: new Map(),
-      voterIds: new Set(voters.map((p) => p.id)),
-      endsAt: Date.now() + this.config.voteMs,
-    };
-    this.setPhase('voting', {
-      options,
-      duration: this.config.voteMs,
-      endsAt: this.vote.endsAt,
-      eligible: voters.length,
-      nextIsFinal: nextM === 1,
-    });
-    // With nobody eliminated yet (or nobody connected), don't stall the room.
-    const wait = voters.length ? this.config.voteMs : Math.min(this.config.voteMs, 2000);
-    this.setTimer('vote', () => this.tallyVote(), wait);
-  }
-
-  handleVote(playerId, optionId) {
-    if (this.phase !== 'voting' || !this.vote) return;
-    if (!this.vote.voterIds.has(playerId)) return;
-    const opt = this.vote.options.find((o) => o.id === optionId);
-    if (!opt) return;
-    this.vote.votes.set(playerId, optionId);
-    const counts = this.voteCounts();
-    this.emitAll('vote:update', { counts, voted: this.vote.votes.size, eligible: this.vote.voterIds.size });
-    if (this.vote.votes.size >= this.vote.voterIds.size) this.tallyVote();
-  }
-
-  voteCounts() {
-    const counts = this.vote.options.map(() => 0);
-    for (const v of this.vote.votes.values()) counts[v]++;
-    return counts;
-  }
-
-  tallyVote() {
-    if (!this.vote) return;
-    this.clearTimer('vote');
-    const counts = this.voteCounts();
-    let winner = 0;
-    for (let i = 1; i < counts.length; i++) if (counts[i] > counts[winner]) winner = i;
-    const chosen = this.vote.options[winner] || this.vote.options[0];
-    this.pendingSet = chosen ? chosen.games.map((g) => g.key) : null;
-    const votedNames = [...this.vote.votes.keys()].map((id) => this.players.get(id)?.name);
-    this.vote = null;
-    this.emitAll('vote:result', { chosen, counts, votedNames });
-    this.setTimer('nextround', () => this.startRound(), 1200);
-  }
-
-  // ---- final --------------------------------------------------------------
-
-  scoreFinal() {
-    const ranking = this.computeRoundScores();
-    this.round.ranking = ranking;
-    const top = ranking[0];
-    const tiedTop = ranking.filter((r) => r.total === top.total);
-    if (tiedTop.length > 1) {
-      // Sudden death: fastest reaction among the tied leaders wins.
-      const rows = this.leaderboardRows(ranking);
-      this.setPhase('cut', {
-        round: this.round.number,
-        final: true,
-        leaderboard: rows,
-        safeIds: [],
-        riskIds: tiedTop.map((r) => r.id),
-        tieAtCut: true,
-        willRedeem: true,
-        extras: this.round.extras,
-      });
-      this.setTimer('cut', () => this.startRedemption(tiedTop.map((r) => r.id), 1, 'final-tiebreak'),
-        this.config.cutRevealMs);
       return;
     }
-    this.declareWinner(top.id, null);
+
+    // Scored finale: penalized reaction time is an error metric — normalize
+    // 0–1000 across everyone who got a clean press; the rest score 0.
+    const ok = results.filter((r) => r.status === 'ok');
+    const normalized = ok.length ? normalizeError(ok.map((r) => r.finalMs)) : [];
+    const points = new Map();
+    ok.forEach((r, i) => points.set(r.id, normalized[i]));
+    for (const r of results) {
+      if (!points.has(r.id)) points.set(r.id, 0);
+      this.totals.set(r.id, (this.totals.get(r.id) || 0) + points.get(r.id));
+    }
+    const chairsBoard = results.map((r) => ({
+      id: r.id, name: r.name, status: r.status,
+      rawMs: r.rawMs != null ? Math.round(r.rawMs) : null,
+      finalMs: Math.round(r.finalMs),
+      earlyPresses: r.earlyPresses, flagged: r.flagged,
+      points: Math.round(points.get(r.id)),
+      total: Math.round(this.totals.get(r.id) || 0),
+    }));
+    const byTotal = [...chairsBoard].sort((a, b) => b.total - a.total);
+    for (const r of chairsBoard) {
+      this.emitPlayer(r.id, 'you:score', {
+        gameName: 'Musical Chairs',
+        raw: r.status === 'ok' ? `${r.rawMs} ms` : r.status,
+        points: r.points, total: r.total,
+        rank: byTotal.findIndex((x) => x.id === r.id) + 1, of: chairsBoard.length,
+      });
+    }
+    this.declareWinner(chairsBoard);
   }
 
-  declareWinner(winnerId, tiebreak) {
-    this.winnerId = winnerId;
-    // Standings: winner, then remaining finalists by final-round rank, then
-    // the eliminated in reverse elimination order.
-    const standings = [];
-    if (winnerId) standings.push(winnerId);
-    if (this.round?.ranking) {
-      for (const r of this.round.ranking) if (!standings.includes(r.id)) standings.push(r.id);
-    }
-    for (const p of this.alive()) if (!standings.includes(p.id)) standings.push(p.id);
-    for (let i = this.eliminationOrder.length - 1; i >= 0; i--) {
-      if (!standings.includes(this.eliminationOrder[i])) standings.push(this.eliminationOrder[i]);
-    }
-    this.finalStandings = standings.map((id, i) => ({
-      place: i + 1,
-      id,
-      name: this.players.get(id)?.name || '?',
-    }));
-    const finalRows = this.round?.ranking ? this.leaderboardRows(this.round.ranking) : [];
+  // ---- winner --------------------------------------------------------------
+
+  declareWinner(chairsBoard = null) {
+    const standings = [...this.players.values()]
+      .map((p) => ({ id: p.id, name: p.name, total: Math.round(this.totals.get(p.id) || 0) }))
+      .sort((a, b) => b.total - a.total)
+      .map((s, i) => ({ place: i + 1, ...s }));
+    this.winnerId = standings[0]?.id || null;
+    this.finalStandings = standings;
     this.setPhase('winner', {
-      winnerId,
-      winnerName: this.players.get(winnerId)?.name || '?',
-      standings: this.finalStandings,
-      finalLeaderboard: finalRows,
-      tiebreak,
-      extras: this.round?.extras || {},
+      winnerId: this.winnerId,
+      winnerName: standings[0]?.name || '?',
+      standings,
+      chairsBoard,
     });
+    this.broadcastPlayers();
   }
 
   // Rematch: same lobby, fresh session state.
   reset() {
-    this.clearTimer('game'); this.clearTimer('music'); this.clearTimer('cut');
-    this.clearTimer('vote'); this.clearTimer('redemption'); this.clearTimer('nextround');
+    this.clearTimer('game'); this.clearTimer('music'); this.clearTimer('redemption');
     this.phase = 'lobby';
-    this.roundNumber = 0;
-    this.usedGames = new Set();
-    this.usedCategories = new Set();
+    this.queue = [];
+    this.queueIndex = 0;
+    this.totals = new Map();
     this.usedContent = {};
     this.round = null;
-    this.eliminationOrder = [];
-    this.pendingSet = null;
+    this.lastScores = null;
     this.redemption = null;
-    this.vote = null;
+    this.afterMusic = null;
     this.winnerId = null;
     this.finalStandings = null;
-    for (const p of this.players.values()) p.eliminated = false;
     for (const [id, p] of this.players) if (!p.connected) this.players.delete(id);
     this.setPhase('lobby', {});
     this.broadcastPlayers();
@@ -851,26 +692,27 @@ export class Room {
   hostNext() {
     switch (this.phase) {
       case 'lobby': return this.start();
-      case 'practice_done': this.startRound(); return { ok: true };
+      case 'test_done':
+      case 'redemption_test_done':
+        return this.backToLobby();
+      case 'practice_done': this.nextGame(); return { ok: true };
       case 'minigame': {
         const g = this.round?.games[this.round.gameIndex];
         if (g) this.closeGame(g.token);
         return { ok: true };
       }
-      case 'music':
+      case 'music': {
         this.clearTimer('music');
-        this.startGame(0);
+        const fn = this.afterMusic;
+        this.afterMusic = null;
+        fn?.();
         return { ok: true };
-      case 'cut':
-        return { ok: true }; // cut auto-advances; ignore
+      }
+      case 'scores':
+        this.nextGame();
+        return { ok: true };
       case 'redemption':
         this.finishRedemption();
-        return { ok: true };
-      case 'reveal':
-        this.startVoting();
-        return { ok: true };
-      case 'voting':
-        this.tallyVote();
         return { ok: true };
       case 'winner':
         this.reset();

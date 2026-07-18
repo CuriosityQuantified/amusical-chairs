@@ -1,7 +1,10 @@
 // Host screen: room creation, lobby + QR, config panel, phase displays,
-// animated reveals, redemption drama, voting tallies, winner.
+// per-game leaderboards, the musical-chairs finale, winner.
+// Format: every player plays every enabled game once, then Musical Chairs;
+// highest cumulative score wins. No elimination.
 
 import { syncClock } from '/js/sync.js';
+import { startChairs } from '/js/chairs.js';
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
@@ -15,8 +18,6 @@ const state = {
   phase: 'lobby',
   audio: null,
 };
-
-const GAME_NAMES = {}; // filled from config toggles payload
 
 function el(tag, attrs = {}, ...kids) {
   const node = document.createElement(tag);
@@ -72,15 +73,24 @@ function enterLobbyUi(res) {
   else $('qr').classList.add('hidden');
   $('join-url').textContent = res.joinUrl ? res.joinUrl.replace(/^https?:\/\//, '') : `${location.host}/?code=${state.code}`;
   buildConfigPanel();
-  renderLadderInto($('lobby-ladder'), [state.players.length || 0], 0);
+  renderLobbySummary();
+}
+
+function enabledCount() {
+  return state.config ? Object.values(state.config.enabled).filter(Boolean).length : 0;
+}
+
+function renderLobbySummary() {
+  $('lobby-ladder').replaceChildren(
+    el('span', { class: 'step' },
+      `${enabledCount()} games + musical chairs · highest total score wins`)
+  );
 }
 
 // ---- config panel ----------------------------------------------------------
 
 function buildConfigPanel() {
   const c = state.config;
-  $('cfg-m').value = c.m;
-  $('cfg-m-val').textContent = c.m;
   $('cfg-dur').value = Math.round(c.gameDuration / 1000);
   $('cfg-dur-val').textContent = Math.round(c.gameDuration / 1000);
   $('cfg-pen').value = Math.round(c.earlyPressPenalty * 100);
@@ -89,16 +99,27 @@ function buildConfigPanel() {
   $('cfg-sling-val').textContent = c.slingshotDistance;
   $('cfg-practice').checked = c.practice;
 
+  const nameOf = (key) => (c.roster || []).find((g) => g.key === key)?.name || key;
   const toggles = $('game-toggles');
   toggles.replaceChildren();
   for (const [key, on] of Object.entries(c.enabled)) {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = on;
     cb.addEventListener('change', () => pushConfig({ enabled: { [key]: cb.checked } }));
-    toggles.append(el('label', {}, cb, key));
+    toggles.append(el('label', {}, cb, nameOf(key)));
   }
 
-  $('cfg-m').oninput = (e) => { $('cfg-m-val').textContent = e.target.value; pushConfig({ m: Number(e.target.value) }); };
+  const tests = $('test-buttons');
+  tests.replaceChildren();
+  for (const g of c.roster || []) {
+    tests.append(el('button', {
+      class: 'secondary',
+      onclick: () => socket.emit('host:test', { key: g.key }, (res) => {
+        if (res && res.error) alert(res.error);
+      }),
+    }, `▶ ${g.name}`));
+  }
+
   $('cfg-dur').oninput = (e) => { $('cfg-dur-val').textContent = e.target.value; pushConfig({ gameDuration: Number(e.target.value) * 1000 }); };
   $('cfg-pen').oninput = (e) => { $('cfg-pen-val').textContent = e.target.value; pushConfig({ earlyPressPenalty: Number(e.target.value) / 100 }); };
   $('cfg-sling').oninput = (e) => { $('cfg-sling-val').textContent = e.target.value; pushConfig({ slingshotDistance: Number(e.target.value) }); };
@@ -111,7 +132,10 @@ function pushConfig(patch) {
   });
 }
 
-socket.on('room:config', (c) => { state.config = c; });
+socket.on('room:config', (c) => {
+  state.config = c;
+  renderLobbySummary();
+});
 
 // ---- lobby joins -----------------------------------------------------------
 
@@ -122,35 +146,16 @@ socket.on('room:players', ({ players }) => {
   list.replaceChildren();
   for (const p of players) {
     const dotCls = !p.connected ? 'off' : (p.sync?.quality || 'ok');
-    list.append(el('span', { class: `chip${p.eliminated ? ' eliminated' : ''}` },
+    list.append(el('span', { class: 'chip' },
       el('span', { class: `dot ${dotCls}` }), p.name));
-  }
-  if (state.phase === 'lobby') {
-    const n = players.length;
-    renderLadderInto($('lobby-ladder'), n >= 4 ? predictLadder(n) : [n], 0);
   }
 });
 
-// Client-side ladder prediction mirrors shared/ladder.js (kept tiny here).
-function predictLadder(n) {
-  const steps = [n];
-  let cur = n;
-  while (cur > 3) {
-    const safe = Math.ceil(cur / 2);
-    const bottom = Math.floor(cur / 2);
-    cur = safe + (bottom >= 3 ? 1 : 0);
-    steps.push(cur);
-  }
-  return steps;
-}
-
-function renderLadderInto(elm, steps, currentIdx) {
+function renderProgressInto(elm, progress) {
   elm.replaceChildren();
-  steps.forEach((s, i) => {
-    if (i) elm.append(el('span', { class: 'arrow' }, '→'));
-    elm.append(el('span', { class: `step${i === currentIdx ? ' current' : ''}` }, String(s)));
-  });
-  elm.append(el('span', { class: 'arrow' }, '→'), el('span', { class: 'step' }, '🏆'));
+  if (!progress) return;
+  elm.append(el('span', { class: 'step current' },
+    `Game ${progress.game} of ${progress.totalGames}`));
 }
 
 // ---- start / next ----------------------------------------------------------
@@ -173,14 +178,12 @@ socket.on('phase', (p) => {
     $('screen-lobby').classList.add('hidden');
     $('screen-run').classList.remove('hidden');
   }
-  if (p.ladder) {
-    const steps = p.ladder.predicted && p.ladder.predicted.length > 1 ? p.ladder.predicted : predictLadder(p.ladder.alive);
-    renderLadderInto($('run-ladder'), steps, 0);
-  }
+  if (p.progress) renderProgressInto($('run-ladder'), p.progress);
   switch (p.name) {
     case 'lobby':
       $('screen-run').classList.add('hidden');
       $('screen-lobby').classList.remove('hidden');
+      renderLobbySummary();
       break;
     case 'music': renderMusic(p); break;
     case 'minigame': renderMinigame(p); break;
@@ -188,12 +191,12 @@ socket.on('phase', (p) => {
       content().replaceChildren(
         el('h1', {}, '🧪 Practice complete'),
         el('p', { class: 'muted' }, `${p.submitted} of ${p.total} submitted something. If someone was lost, fix it now.`),
-        el('p', {}, 'Press Next ▸ to start Round 1 for real.'));
+        el('p', {}, 'Press Next ▸ to start the games for real.'));
       break;
-    case 'cut': renderCut(p); break;
+    case 'test_done': renderTestDone(p); break;
+    case 'scores': renderScores(p); break;
     case 'redemption': renderRedemption(p); break;
-    case 'reveal': renderReveal(p); break;
-    case 'voting': renderVoting(p); break;
+    case 'redemption_test_done': renderRedemptionTestDone(p); break;
     case 'winner': renderWinner(p); break;
   }
 });
@@ -234,26 +237,34 @@ function renderMusic(p) {
   for (let i = 0; i < 10; i++) {
     viz.append(el('div', { class: 'bar', style: `animation-delay:-${i * 0.07}s` }));
   }
+  const arena = el('div', {});
   content().replaceChildren(
-    el('h1', {}, p.final ? '🏆 THE FINAL' : `Round ${p.round}`),
+    el('h1', {}, p.chairs ? '🪑 MUSICAL CHAIRS — THE FINALE' : `Game ${p.gameNumber || ''} of ${p.progress?.totalGames || ''}`),
     el('h2', {}, '🎵 The music is playing…'),
     viz,
-    el('p', { class: 'muted', style: 'font-size:20px' }, `When it stops: ${(p.gameNames || []).join('  +  ')}`)
+    arena,
+    el('p', { class: 'muted', style: 'font-size:20px' },
+      p.chairs
+        ? 'When it stops: eyes on your own screen — press on green. Fastest reaction scores the most.'
+        : `When it stops: ${(p.gameNames || []).join('  +  ')}`)
   );
+  const names = state.players.map((pl) => pl.name);
+  const anim = startChairs(arena, { names, chairs: Math.max(1, names.length - 1), size: 340 });
   playMusic(p.duration);
   setTimeout(() => {
     viz.classList.add('stopped');
+    anim.stop(); // everyone freezes when the music cuts
     const h = content().querySelector('h2');
     if (h) h.textContent = '🛑 THE MUSIC STOPPED!';
   }, Math.max(0, p.duration - 150));
 }
 
-// ---- minigame progress (count only, never live scores — spec §8.1) ---------
+// ---- minigame progress (count only, never live scores) ---------------------
 
 function renderMinigame(p) {
   content().replaceChildren(
-    el('h1', {}, (p.practice ? '🧪 PRACTICE: ' : '') + p.gameName),
-    el('p', { class: 'muted', style: 'font-size:20px' }, `Game ${p.gameIndex + 1} of ${p.gameCount} · ${Math.round(p.duration / 1000)}s`),
+    el('h1', {}, (p.practice ? '🧪 PRACTICE: ' : p.test ? '🔧 TEST: ' : '') + p.gameName),
+    el('p', { class: 'muted', style: 'font-size:20px' }, `${Math.round(p.duration / 1000)}s`),
     el('div', { class: 'progress-count', id: 'prog' }, '0'),
     el('p', { class: 'muted', style: 'font-size:22px' }, 'submitted'),
     el('div', { class: 'countdown' }, el('div', { id: 'host-bar' }))
@@ -274,75 +285,110 @@ socket.on('host:progress', ({ submitted, total }) => {
   if (prog) prog.textContent = `${submitted} of ${total}`;
 });
 
-// ---- cut + redemption drama --------------------------------------------------
-
-function boardTable(rows, { safeIds = [], animate = false } = {}) {
-  const table = el('table', { class: 'board' });
-  table.append(el('tr', {},
-    el('th', {}, '#'), el('th', {}, 'Player'),
-    ...(rows[0]?.games || []).map((g) => el('th', {}, g.name)),
-    el('th', {}, 'Total'), el('th', {}, '')));
-  rows.forEach((r, i) => {
-    const cls = [];
-    if (animate) cls.push('reveal-row');
-    if (r.status === 'eliminated') cls.push('eliminated');
-    if (r.status === 'saved') cls.push('saved');
-    if (safeIds.length && i === safeIds.length - 1) cls.push('cutline');
-    const tr = el('tr', { class: cls.join(' ') },
-      el('td', {}, String(r.rank)),
-      el('td', {}, r.name),
-      ...r.games.map((g) => el('td', { class: 'num' }, `${g.raw} · ${g.norm}`)),
-      el('td', { class: 'num' }, String(r.total)),
-      el('td', {}, r.status === 'saved' ? '🛟 saved' : r.status === 'eliminated' ? '❌ out' : ''));
-    table.append(tr);
-  });
-  if (animate) {
-    // Bottom-up staggered reveal.
-    const trs = [...table.querySelectorAll('tr.reveal-row')];
-    trs.reverse().forEach((tr, i) => setTimeout(() => tr.classList.add('shown'), 250 + i * 220));
-  }
-  return table;
-}
+// ---- per-game scores --------------------------------------------------------
 
 function extrasBlock(extras) {
   const wrap = el('div', {});
   if (!extras) return wrap;
-  if (extras.unique?.clusters?.length) {
-    wrap.append(el('h3', {}, 'The answers:'));
-    const div = el('div', { class: 'answer-clusters' });
-    for (const c of extras.unique.clusters) {
-      div.append(el('p', {}, `${c.label} ×${c.size} — ${c.answers.join(', ')}`));
-    }
-    wrap.append(div);
-  }
   if (extras.readroom?.actualPct != null) {
     wrap.append(el('h3', {}, `The room's real answer: ${extras.readroom.actualPct}% said yes`));
   }
   return wrap;
 }
 
-function renderCut(p) {
-  const safeNames = p.leaderboard.filter((r) => p.safeIds.includes(r.id)).map((r) => r.name);
-  const riskNames = p.leaderboard.filter((r) => p.riskIds.includes(r.id)).map((r) => r.name);
+function scoreTable(rows, { animate = false } = {}) {
+  const table = el('table', { class: 'board' });
+  table.append(el('tr', {},
+    el('th', {}, '#'), el('th', {}, 'Player'),
+    el('th', {}, 'Result'), el('th', {}, 'Points'), el('th', {}, 'Total')));
+  rows.forEach((r) => {
+    const tr = el('tr', { class: animate ? 'reveal-row' : '' },
+      el('td', {}, String(r.rank)),
+      el('td', {}, r.name),
+      el('td', { class: 'num' }, r.raw),
+      el('td', { class: 'num' }, `+${r.points}`),
+      el('td', { class: 'num' }, String(r.total)));
+    table.append(tr);
+  });
+  if (animate) {
+    // Bottom-up staggered reveal.
+    const trs = [...table.querySelectorAll('tr.reveal-row')];
+    trs.reverse().forEach((tr, i) => setTimeout(() => tr.classList.add('shown'), 250 + i * 180));
+  }
+  return table;
+}
+
+function renderScores(p) {
   content().replaceChildren(
-    el('h1', {}, `Round ${p.round} — the cut`),
-    boardTable(p.leaderboard, { safeIds: p.safeIds }),
-    el('h2', { style: 'color:var(--good)' }, `Safe: ${safeNames.join(', ') || '—'}`),
-    el('h2', { style: 'color:var(--bad)' },
-      p.willRedeem ? `Fighting for redemption: ${riskNames.join(', ')}` : `Eliminated: ${riskNames.join(', ')}`),
-    p.tieAtCut ? el('p', { class: 'muted' }, 'Tie at the cut line — everyone tied goes to redemption.') : '',
-    extrasBlock(p.extras)
+    el('h1', {}, `${p.gameName} — scores`),
+    scoreTable(p.leaderboard, { animate: true }),
+    extrasBlock(p.extras),
+    el('p', { class: 'muted' },
+      p.nextIsChairs
+        ? 'Next up: 🪑 MUSICAL CHAIRS — the finale. Press Next ▸'
+        : 'Press Next ▸ for the next game.')
   );
 }
 
-function renderRedemption(p) {
+// ---- solo test results -------------------------------------------------------
+
+function renderTestDone(p) {
+  const table = el('table', { class: 'board' });
+  table.append(el('tr', {}, el('th', {}, 'Player'), el('th', {}, 'Raw result')));
+  for (const r of p.results || []) {
+    table.append(el('tr', {}, el('td', {}, r.name), el('td', { class: 'num' }, r.raw)));
+  }
   content().replaceChildren(
-    el('h1', {}, p.mode === 'final-tiebreak' ? '⚡ SUDDEN DEATH' : '🚨 REDEMPTION'),
+    el('h1', {}, `🔧 Test complete: ${p.gameName}`),
+    p.results?.length
+      ? table
+      : el('p', { class: 'muted' }, 'Nobody submitted anything.'),
+    el('p', { class: 'muted' }, `${p.results?.length || 0} of ${p.total} submitted.`),
+    extrasBlock(p.extras),
+    el('p', {}, 'Press Next ▸ to return to the lobby.')
+  );
+}
+
+function fmtRedRow(r) {
+  if (r.status === 'ok') {
+    const pen = r.earlyPresses
+      ? ` (+${r.earlyPresses} early press${r.earlyPresses > 1 ? 'es' : ''} → ${r.finalMs} ms)`
+      : '';
+    return `${r.name}: ${Math.round(r.rawMs)} ms${pen}${r.flagged ? ' ⚠' : ''}`;
+  }
+  if (r.status === 'postGreenTimeout') return `${r.name}: froze on green`;
+  if (r.status === 'tooFast') return `${r.name}: impossibly fast ⚠ (disqualified)`;
+  return `${r.name}: never saw green 💀 (${r.earlyPresses} early presses)`;
+}
+
+function renderRedemptionTestDone(p) {
+  const box = el('div', {}, el('h1', {}, '🔧 Reaction test results'));
+  for (const r of p.results || []) box.append(el('p', {}, fmtRedRow(r)));
+  box.append(el('p', {}, 'Press Next ▸ to return to the lobby.'));
+  content().replaceChildren(box);
+}
+
+// ---- musical chairs finale ---------------------------------------------------
+
+let redemptionAnim = null;
+
+function renderRedemption(p) {
+  const arena = el('div', {});
+  content().replaceChildren(
+    el('h1', {}, '🪑 MUSICAL CHAIRS'),
     el('p', { style: 'font-size:22px' },
-      `${p.participantNames.join(' · ')} — ${p.saveCount} will be saved.`),
+      p.scored
+        ? `${p.participantNames.join(' · ')} — fastest reaction scores the most points.`
+        : `${p.participantNames.join(' · ')}`),
+    arena,
     el('div', { class: 'light', id: 'host-light' }, 'WAIT…'),
     el('p', { class: 'muted', id: 'red-progress' }, 'Eyes on your own screens. Press the instant it turns green.')
   );
+  redemptionAnim = startChairs(arena, {
+    names: p.participantNames,
+    chairs: Math.max(1, p.participantNames.length - 1),
+    size: 280,
+  });
 }
 
 socket.on('redemption:go', (p) => {
@@ -354,6 +400,7 @@ socket.on('redemption:go', (p) => {
   setTimeout(() => {
     const l = $('host-light');
     if (l) { l.classList.add('green'); l.textContent = 'GO!'; }
+    redemptionAnim?.stop(); // music stopped — freeze the circle
   }, wait);
 });
 
@@ -362,80 +409,29 @@ socket.on('redemption:progress', ({ reported, total }) => {
   if (rp) rp.textContent = `${reported} of ${total} have pressed…`;
 });
 
-// ---- reveal ------------------------------------------------------------------
-
-function fmtRedRow(r) {
-  if (r.status === 'ok') {
-    const pen = r.earlyPresses
-      ? ` (+${r.earlyPresses} early press${r.earlyPresses > 1 ? 'es' : ''} → ${r.finalMs} ms)`
-      : '';
-    return `${r.name}: ${Math.round(r.rawMs)} ms${pen}${r.flagged ? ' ⚠' : ''}`;
-  }
-  if (r.status === 'postGreenTimeout') return `${r.name}: froze on green (10s)`;
-  if (r.status === 'tooFast') return `${r.name}: impossibly fast ⚠ (disqualified)`;
-  return `${r.name}: never saw green 💀 (${r.earlyPresses} early presses)`;
-}
-
-function renderReveal(p) {
-  const parts = [
-    el('h1', {}, `Round ${p.round} — results`),
-    boardTable(p.leaderboard, { animate: true }),
-  ];
-  if (p.redemption) {
-    const box = el('div', { style: 'margin-top:14px' }, el('h2', {}, '🚨 Redemption results'));
-    for (const r of p.redemption.results) {
-      box.append(el('p', { style: r.saved ? 'color:var(--good);font-weight:700;font-size:20px' : '' },
-        (r.saved ? '🛟 ' : '') + fmtRedRow(r)));
-    }
-    parts.push(box);
-  }
-  if (p.eliminatedNames?.length) {
-    parts.push(el('h2', { style: 'color:var(--bad)' }, `Out: ${p.eliminatedNames.join(', ')}`));
-  }
-  parts.push(extrasBlock(p.extras));
-  parts.push(el('p', { class: 'muted' },
-    p.nextIsFinal ? 'Next up: THE FINAL. Press Next ▸' : 'Press Next ▸ for minigame voting.'));
-  content().replaceChildren(...parts);
-}
-
-// ---- voting ------------------------------------------------------------------
-
-function renderVoting(p) {
-  const rows = p.options.map((o, i) => el('h2', { id: `vopt-${i}` },
-    `${o.games.map((g) => g.name).join(' + ')} — 0 votes`));
-  content().replaceChildren(
-    el('h1', {}, p.nextIsFinal ? '🗳 The eliminated choose the FINAL game' : '🗳 The eliminated choose the next games'),
-    el('p', { class: 'muted' }, `${p.eligible} ghost${p.eligible === 1 ? '' : 's'} voting…`),
-    ...rows
-  );
-}
-
-socket.on('vote:update', ({ counts }) => {
-  counts.forEach((c, i) => {
-    const o = $(`vopt-${i}`);
-    if (o) o.textContent = o.textContent.replace(/ — \d+ votes?$/, ` — ${c} vote${c === 1 ? '' : 's'}`);
-  });
-});
-
-socket.on('vote:result', ({ chosen }) => {
-  if (!chosen) return;
-  content().append(el('h2', { style: 'color:var(--good)' },
-    `Chosen: ${chosen.games.map((g) => g.name).join(' + ')}`));
-});
-
 // ---- winner ------------------------------------------------------------------
 
 function renderWinner(p) {
-  const list = el('ol', { style: 'font-size:22px; text-align:left; max-width:420px; margin:20px auto' });
-  for (const s of (p.standings || []).slice(0, 10)) list.append(el('li', {}, s.name));
-  content().replaceChildren(
+  const parts = [
     el('h2', {}, '👑 Your new office champion'),
     el('div', { class: 'winner-name' }, p.winnerName || '—'),
-    p.tiebreak ? el('p', { class: 'muted' }, 'Decided by sudden-death reaction!') : '',
-    p.finalLeaderboard?.length ? boardTable(p.finalLeaderboard) : '',
-    list,
-    el('p', { class: 'muted' }, 'Press Next ▸ for a rematch lobby.')
-  );
+  ];
+  if (p.chairsBoard?.length) {
+    const box = el('div', { style: 'margin-top:10px' }, el('h2', {}, '🪑 Musical Chairs results'));
+    for (const r of p.chairsBoard) {
+      box.append(el('p', {}, `${fmtRedRow(r)} → +${r.points} pts`));
+    }
+    parts.push(box);
+  }
+  const table = el('table', { class: 'board' });
+  table.append(el('tr', {}, el('th', {}, '#'), el('th', {}, 'Player'), el('th', {}, 'Total')));
+  for (const s of p.standings || []) {
+    table.append(el('tr', {},
+      el('td', {}, String(s.place)), el('td', {}, s.name), el('td', { class: 'num' }, String(s.total))));
+  }
+  parts.push(el('h2', { style: 'margin-top:14px' }, 'Final standings'), table);
+  parts.push(el('p', { class: 'muted' }, 'Press Next ▸ for a rematch lobby.'));
+  content().replaceChildren(...parts);
   confetti();
 }
 

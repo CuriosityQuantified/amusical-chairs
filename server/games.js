@@ -3,17 +3,8 @@
 // Metrics returned as `null` mean "treat as non-submission" (§4.6: P90 clamp,
 // normalized 0, NOT auto-elimination).
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { randInt, shuffle, pick } from '../shared/rng.js';
 import { rgbToLab, ciede2000 } from '../shared/ciede2000.js';
-import { clusterAnswers } from '../shared/cluster.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PRICES = JSON.parse(
-  fs.readFileSync(path.join(__dirname, '../public/assets/prices.json'), 'utf8')
-);
 
 const SENTENCES = [
   'The quick brown fox jumps over the lazy dog while the band plays on.',
@@ -26,21 +17,6 @@ const SENTENCES = [
   'The meeting could have been an email, and the email could have waited.',
   'Half of debugging is staring; the other half is apologizing to the code.',
   'If you can read this sentence quickly, your coffee is finally working.',
-];
-
-const UNIQUE_PROMPTS = [
-  'Name a breakfast food',
-  'Name a country',
-  'Name something in a toolbox',
-  'Name a pizza topping',
-  'Name a farm animal',
-  'Name a board game',
-  "Name something you'd find at the beach",
-  'Name a superhero',
-  'Name a fruit',
-  'Name a household chore',
-  'Name a musical instrument',
-  'Name something in a kitchen drawer',
 ];
 
 const ROOM_QUESTIONS = [
@@ -62,22 +38,18 @@ export const ROSTER = [
   { key: 'rgb', name: 'RGB Color Match', category: 'perceptual', type: 'error' },
   { key: 'oddoneout', name: 'Odd One Out', category: 'perceptual', type: 'score' },
   { key: 'bisect', name: 'Bisect the Line', category: 'perceptual', type: 'error' },
-  { key: 'pie', name: 'Pie Estimate', category: 'perceptual', type: 'error' },
   { key: 'trace', name: 'Trace the Shape', category: 'perceptual', type: 'error' },
   { key: 'dots', name: 'Dots in the Jar', category: 'numerical', type: 'error' },
-  { key: 'price', name: 'Guess the Price', category: 'numerical', type: 'error' },
   { key: 'stopclock', name: 'Stop the Clock', category: 'timing', type: 'error' },
   { key: 'gridflash', name: 'Grid Flash', category: 'memory', type: 'error' },
-  { key: 'unique', name: 'Unique Answer', category: 'social', type: 'score' },
   { key: 'readroom', name: 'Read the Room', category: 'social', type: 'error' },
-  { key: 'clickacc', name: 'Click Accuracy', category: 'motor', type: 'error' },
   { key: 'typing', name: 'Typing Sprint', category: 'motor', type: 'score', keyboardOnly: true },
   { key: 'spacemash', name: 'Space Mash', category: 'motor', type: 'score' },
   { key: 'slingshot', name: 'Slingshot', category: 'motor', type: 'error' },
 ];
 
 export const ROSTER_BY_KEY = new Map(ROSTER.map((g) => [g.key, g]));
-export const NEEDS_AGGREGATION = new Set(['unique', 'readroom']);
+export const NEEDS_AGGREGATION = new Set(['readroom']);
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -93,7 +65,7 @@ function pickContent(rng, listLen, usedSet) {
 }
 
 // Build the per-round data for a game. `clientData` is broadcast to players;
-// `secret` stays server-side (answers, prices).
+// `secret` stays server-side (answers).
 // ctx: { rng, config, used } — `used` maps content-list name -> Set of indices.
 export function buildGameData(key, ctx) {
   const { rng, config, used } = ctx;
@@ -118,14 +90,6 @@ export function buildGameData(key, ctx) {
       }
       return { clientData: { targets }, secret: { targets } };
     }
-    case 'pie': {
-      const targets = [];
-      while (targets.length < 5) {
-        const t = randInt(rng, 8, 92);
-        if (!targets.some((x) => Math.abs(x - t) < 5)) targets.push(t);
-      }
-      return { clientData: { targets }, secret: { targets } };
-    }
     case 'trace':
       return {
         clientData: { shape: pick(rng, ['spiral', 'star', 'wave']), seed: `trace-${Math.floor(rng() * 1e9)}` },
@@ -135,34 +99,15 @@ export function buildGameData(key, ctx) {
       const counts = [randInt(rng, 22, 40), randInt(rng, 90, 150), randInt(rng, 300, 500)];
       return { clientData: { counts, seed: `dots-${Math.floor(rng() * 1e9)}` }, secret: { counts } };
     }
-    case 'price': {
-      const set = usedSet('price');
-      const items = [0, 1, 2].map(() => PRICES[pickContent(rng, PRICES.length, set)]);
-      return {
-        clientData: { items: items.map(({ id, name, emoji, blurb }) => ({ id, name, emoji, blurb })) },
-        secret: { prices: items.map((i) => i.price) },
-      };
-    }
     case 'stopclock':
       return { clientData: { targetMs: 10000, visibleMs: 3000, attempts: 2 }, secret: {} };
     case 'gridflash': {
       const patterns = [0, 1].map(() => shuffle(rng, [...Array(25).keys()]).slice(0, 8).sort((a, b) => a - b));
       return { clientData: { patterns, showMs: 4000 }, secret: { patterns } };
     }
-    case 'unique': {
-      const idx = pickContent(rng, UNIQUE_PROMPTS.length, usedSet('unique'));
-      return { clientData: { prompt: UNIQUE_PROMPTS[idx] }, secret: {} };
-    }
     case 'readroom': {
       const idx = pickContent(rng, ROOM_QUESTIONS.length, usedSet('readroom'));
       return { clientData: { question: ROOM_QUESTIONS[idx] }, secret: {} };
-    }
-    case 'clickacc': {
-      const targets = [...Array(10)].map(() => ({
-        x: 0.08 + rng() * 0.84,
-        y: 0.08 + rng() * 0.84,
-      }));
-      return { clientData: { targets }, secret: {} };
     }
     case 'typing': {
       const idx = pickContent(rng, SENTENCES.length, usedSet('typing'));
@@ -170,14 +115,11 @@ export function buildGameData(key, ctx) {
     }
     case 'spacemash':
       return { clientData: { activeMs: 10000, capPerSec: 20 }, secret: {} };
-    case 'slingshot': {
-      // Same seeded sequence of 5 winds for every player (spec §6.3 game 15).
-      const winds = [...Array(5)].map(() => Math.round((rng() * 2 - 1) * 15 * 10) / 10);
+    case 'slingshot':
       return {
-        clientData: { winds, distance: config.slingshotDistance, shots: 5, rings: [2, 5, 10, 20] },
+        clientData: { distance: config.slingshotDistance, shots: 5, rings: [2, 5, 10, 20] },
         secret: {},
       };
-    }
     default:
       throw new Error(`unknown game key ${key}`);
   }
@@ -201,8 +143,7 @@ export function computeMetric(key, payload, secret, clientData, config) {
       if (c == null) return null;
       return clamp(Math.floor(c), 0, 300);
     }
-    case 'bisect':
-    case 'pie': {
+    case 'bisect': {
       if (!Array.isArray(payload.guesses)) return null;
       const targets = secret.targets;
       let any = false;
@@ -225,10 +166,9 @@ export function computeMetric(key, payload, secret, clientData, config) {
       if (dev == null || cov == null || cov < 0.9) return null;
       return clamp(dev, 0, 2);
     }
-    case 'dots':
-    case 'price': {
+    case 'dots': {
       if (!Array.isArray(payload.guesses)) return null;
-      const truths = key === 'dots' ? secret.counts : secret.prices;
+      const truths = secret.counts;
       let any = false;
       let sum = 0;
       for (let i = 0; i < truths.length; i++) {
@@ -264,22 +204,6 @@ export function computeMetric(key, payload, secret, clientData, config) {
       }
       return total;
     }
-    case 'clickacc': {
-      if (!Array.isArray(payload.distances)) return null;
-      const n = clientData.targets.length;
-      let any = false;
-      let sum = 0;
-      for (let i = 0; i < n; i++) {
-        const d = num(payload.distances[i]);
-        if (d == null || d < 0) {
-          sum += 0.75; // missed target: worse than any real click
-        } else {
-          any = true;
-          sum += clamp(d, 0, 1.5);
-        }
-      }
-      return any ? sum / n : null;
-    }
     case 'typing': {
       const typed = typeof payload.typed === 'string' ? payload.typed.slice(0, 500) : null;
       if (typed == null || !typed.length) return null;
@@ -313,26 +237,6 @@ export function computeMetric(key, payload, secret, clientData, config) {
 // Social games need every submission before anyone can be scored.
 // entries: [{ playerId, payload }]. Returns { metrics: Map, extra }.
 export function aggregateGame(key, entries) {
-  if (key === 'unique') {
-    const valid = entries.filter(
-      (e) => e.payload && typeof e.payload.answer === 'string' && e.payload.answer.trim().length
-    );
-    const metrics = new Map();
-    const clusters = clusterAnswers(
-      valid.map((e) => ({ id: e.playerId, answer: e.payload.answer.trim().slice(0, 60) }))
-    );
-    for (const cluster of clusters) {
-      for (const id of cluster.members) metrics.set(id, 1000 / cluster.size);
-    }
-    return {
-      metrics,
-      extra: {
-        clusters: clusters
-          .sort((a, b) => b.size - a.size)
-          .map((c) => ({ label: c.label, size: c.size, answers: c.answers })),
-      },
-    };
-  }
   if (key === 'readroom') {
     const valid = entries.filter((e) => e.payload && typeof e.payload.answer === 'boolean');
     const metrics = new Map();
@@ -355,16 +259,12 @@ export function formatRaw(key, metric, payload) {
   switch (key) {
     case 'rgb': return `ΔE ${metric.toFixed(1)}`;
     case 'oddoneout': return `${metric} tiles`;
-    case 'bisect':
-    case 'pie': return `${metric.toFixed(1)} pts off`;
+    case 'bisect': return `${metric.toFixed(1)} pts off`;
     case 'trace': return `${(metric * 100).toFixed(1)}% dev`;
-    case 'dots':
-    case 'price': return `${(metric * 100).toFixed(0)}% off`;
+    case 'dots': return `${(metric * 100).toFixed(0)}% off`;
     case 'stopclock': return `${Math.round(metric)} ms off`;
     case 'gridflash': return `${metric} cells off`;
-    case 'unique': return payload?.answer ? `“${String(payload.answer).slice(0, 30)}”` : `${Math.round(metric)}`;
     case 'readroom': return `${metric.toFixed(0)} pts off`;
-    case 'clickacc': return `${(metric * 100).toFixed(1)}% avg miss`;
     case 'typing': return `${Math.round(metric)} net cpm`;
     case 'spacemash': return `${metric} presses${payload?.flagged ? ' ⚠' : ''}`;
     case 'slingshot': return `${metric.toFixed(1)} ft`;

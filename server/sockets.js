@@ -66,6 +66,29 @@ export function attachSockets(io) {
       cb(r.join(socket, { name, playerId }));
     });
 
+    // Solo practice: one person, no host screen. The lone player creates a
+    // private room and drives it (any game or the reaction round, unscored).
+    socket.on('solo:create', ({ name } = {}, cb) => {
+      if (typeof cb !== 'function') return;
+      let code;
+      do { code = makeRoomCode(); } while (rooms.has(code));
+      const r = new Room(io, code, {}, destroyRoom);
+      r.solo = true;
+      rooms.set(code, r);
+      cb(r.join(socket, { name }));
+    });
+
+    const soloOnly = (fn) => (...args) => {
+      const r = room();
+      const cb = args.find((a) => typeof a === 'function');
+      if (!r || !r.solo || !socket.data.playerId) return cb?.({ error: 'Not in a solo room.' });
+      fn(r, ...args);
+    };
+
+    socket.on('solo:play', soloOnly((r, payload, cb) => cb?.(r.startTest(payload?.key))));
+    socket.on('solo:redemption', soloOnly((r, _p, cb) => cb?.(r.startRedemptionTest())));
+    socket.on('solo:menu', soloOnly((r, _p, cb) => cb?.(r.backToLobby())));
+
     socket.on('sync:report', (sync) => {
       const r = room();
       if (r && socket.data.playerId) r.recordSync(socket.data.playerId, sync);
@@ -74,11 +97,6 @@ export function attachSockets(io) {
     socket.on('player:submit', ({ payload } = {}) => {
       const r = room();
       if (r && socket.data.playerId) r.handleSubmit(socket.data.playerId, payload);
-    });
-
-    socket.on('player:vote', ({ optionId } = {}) => {
-      const r = room();
-      if (r && socket.data.playerId) r.handleVote(socket.data.playerId, Number(optionId));
     });
 
     socket.on('redemption:report', (report) => {
@@ -93,6 +111,7 @@ export function attachSockets(io) {
     };
 
     socket.on('host:start', hostOnly((r, _p, cb) => cb?.(r.start())));
+    socket.on('host:test', hostOnly((r, payload, cb) => cb?.(r.startTest(payload?.key))));
     socket.on('host:next', hostOnly((r, _p, cb) => cb?.(r.hostNext())));
     socket.on('host:config', hostOnly((r, payload, cb) => cb?.(r.updateConfig(payload || {}))));
 

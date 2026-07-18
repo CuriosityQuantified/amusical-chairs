@@ -26,17 +26,31 @@ function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
-function makeCanvas(root, height = 360) {
+// Vertical space left for a game below `root`'s top edge, so everything fits
+// in the viewport without scrolling. `reserve` = room kept for the game's own
+// notes/buttons around the play area.
+function availHeight(root, reserve = 0) {
+  const top = root.getBoundingClientRect().top || 0;
+  return Math.max(160, Math.floor(window.innerHeight - top - reserve - 16));
+}
+
+function makeCanvas(root, height = 360, reserve = 90) {
   const c = h('canvas', { class: 'game' });
   root.append(c);
   const w = Math.min(root.clientWidth || 680, 680);
+  const hgt = Math.min(height, availHeight(root, reserve));
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   c.width = w * dpr;
-  c.height = height * dpr;
-  c.style.height = `${height}px`;
+  c.height = hgt * dpr;
+  // Explicit CSS size (not width:100%) so pointer coordinates always match
+  // the logical drawing coordinates.
+  c.style.width = `${w}px`;
+  c.style.maxWidth = '100%';
+  c.style.height = `${hgt}px`;
+  c.style.margin = '0 auto';
   const ctx2d = c.getContext('2d');
   ctx2d.scale(dpr, dpr);
-  return { canvas: c, ctx: ctx2d, w, hgt: height };
+  return { canvas: c, ctx: ctx2d, w, hgt };
 }
 
 function canvasPos(canvas, ev) {
@@ -92,6 +106,10 @@ GameClients.oddoneout = {
     const score = h('div', { class: 'mash-count' }, '0');
     const gridEl = h('div', { class: 'oddgrid' });
     root.append(score, gridEl);
+    // Square grid sized to fit the viewport below the score — never scroll.
+    const side = Math.min(root.clientWidth || 680, 480, availHeight(root, 100));
+    gridEl.style.width = `${side}px`;
+    gridEl.style.margin = '0 auto';
 
     function next() {
       level++;
@@ -166,61 +184,6 @@ GameClients.bisect = {
       guesses.push(clamp(((x - pad) / (w - 2 * pad)) * 100, 0, 100));
       show();
     });
-    show();
-    return { collect: () => (guesses.length ? { guesses } : null) };
-  },
-};
-
-// ---- 4. Pie Estimate -------------------------------------------------------
-
-GameClients.pie = {
-  intro: 'What percent of the pie is purple? Slide and confirm. Five pies.',
-  start(root, ctx) {
-    const targets = ctx.data.targets;
-    const guesses = [];
-    const note = h('p', { class: 'trial-note center' });
-    const { canvas, ctx: g, w } = makeCanvas(root, 260);
-    const val = h('div', { class: 'center', style: { fontSize: '28px', fontWeight: '700' } }, '50%');
-    const slider = h('input', {
-      type: 'range', min: 0, max: 100, value: 50,
-      oninput: () => { val.textContent = `${slider.value}%`; },
-    });
-    const btn = h('button', { class: 'big', onclick: confirm }, 'Confirm');
-    root.append(val, slider, btn, note);
-
-    function drawPie(pct) {
-      g.clearRect(0, 0, w, 260);
-      const cx = w / 2;
-      const cy = 130;
-      const r = 110;
-      // Random-ish start rotation per trial (seeded via target) so the wedge
-      // can't be read off the 12 o'clock position every time.
-      const rot = (targets[guesses.length] * 37) % 360 * Math.PI / 180;
-      g.beginPath();
-      g.moveTo(cx, cy);
-      g.arc(cx, cy, r, rot, rot + (pct / 100) * Math.PI * 2);
-      g.closePath();
-      g.fillStyle = '#7c5cff';
-      g.fill();
-      g.beginPath();
-      g.moveTo(cx, cy);
-      g.arc(cx, cy, r, rot + (pct / 100) * Math.PI * 2, rot + Math.PI * 2);
-      g.closePath();
-      g.fillStyle = '#22d3a5';
-      g.fill();
-    }
-    function show() {
-      if (guesses.length >= targets.length) return ctx.submit({ guesses });
-      note.textContent = `Pie ${guesses.length + 1} of ${targets.length} — percent that is purple?`;
-      slider.value = 50;
-      val.textContent = '50%';
-      drawPie(targets[guesses.length]);
-    }
-    function confirm() {
-      if (guesses.length >= targets.length) return;
-      guesses.push(Number(slider.value));
-      show();
-    }
     show();
     return { collect: () => (guesses.length ? { guesses } : null) };
   },
@@ -392,42 +355,6 @@ GameClients.dots = {
   },
 };
 
-// ---- 7. Guess the Price ----------------------------------------------------
-
-GameClients.price = {
-  intro: 'Guess the real retail price. Three items. Closest relative error wins.',
-  start(root, ctx) {
-    const items = ctx.data.items;
-    const guesses = [];
-    const box = h('div', { class: 'center' });
-    const input = h('input', { type: 'number', placeholder: 'Price in USD', min: 0, inputmode: 'decimal' });
-    const btn = h('button', { class: 'big', onclick: confirm }, 'Guess');
-    root.append(box, input, h('div', { style: { marginTop: '8px' } }, btn));
-
-    function show() {
-      if (guesses.length >= items.length) return ctx.submit({ guesses });
-      const it = items[guesses.length];
-      box.replaceChildren(
-        h('div', { class: 'price-item' },
-          h('div', { class: 'emoji' }, it.emoji),
-          h('h2', {}, it.name),
-          h('p', { class: 'muted' }, it.blurb),
-          h('p', { class: 'trial-note' }, `Item ${guesses.length + 1} of ${items.length}`))
-      );
-      input.value = '';
-      input.focus();
-    }
-    function confirm() {
-      const v = Number(input.value);
-      if (!Number.isFinite(v) || v < 0) return;
-      guesses.push(v);
-      show();
-    }
-    show();
-    return { collect: () => (guesses.length ? { guesses } : null) };
-  },
-};
-
 // ---- 8. Stop the Clock -----------------------------------------------------
 
 GameClients.stopclock = {
@@ -483,6 +410,10 @@ GameClients.gridflash = {
     const grid = h('div', { class: 'grid5' });
     const btn = h('button', { class: 'big', onclick: confirm, disabled: true }, 'Done');
     root.append(note, grid, h('div', { style: { marginTop: '8px' } }, btn));
+    // Square 5×5 grid sized to fit above the Done button — never scroll.
+    const side = Math.min(root.clientWidth || 680, 440, availHeight(root, 140));
+    grid.style.width = `${side}px`;
+    grid.style.margin = '0 auto';
     const cells = [...Array(25)].map((_, i) => {
       const c = h('div', {
         class: 'cell',
@@ -524,24 +455,6 @@ GameClients.gridflash = {
   },
 };
 
-// ---- 10. Unique Answer -----------------------------------------------------
-
-GameClients.unique = {
-  intro: 'Give an answer nobody else gives. Matching answers split the points.',
-  start(root, ctx) {
-    const input = h('input', { type: 'text', placeholder: 'Your answer…', maxlength: 40, autocomplete: 'off' });
-    root.append(
-      h('h2', { class: 'center' }, ctx.data.prompt),
-      h('p', { class: 'muted center' }, 'Score = 1000 ÷ number of players with the same answer. Be unique — but valid!'),
-      input,
-      h('div', { style: { marginTop: '10px' } },
-        h('button', { class: 'big', onclick: () => { if (input.value.trim()) ctx.submit({ answer: input.value }); } }, 'Submit'))
-    );
-    input.focus();
-    return { collect: () => (input.value.trim() ? { answer: input.value } : null) };
-  },
-};
-
 // ---- 11. Read the Room -----------------------------------------------------
 
 GameClients.readroom = {
@@ -569,46 +482,6 @@ GameClients.readroom = {
       step2.classList.remove('hidden');
     }
     return { collect: () => (answer == null ? null : { answer, prediction: Number(slider.value) }) };
-  },
-};
-
-// ---- 12. Click Accuracy ----------------------------------------------------
-
-GameClients.clickacc = {
-  intro: 'Ten targets. Tap as close to each center as you can. Accuracy, not speed.',
-  start(root, ctx) {
-    const targets = ctx.data.targets;
-    const distances = [];
-    const note = h('p', { class: 'trial-note center' });
-    const { canvas, ctx: g, w, hgt } = makeCanvas(root, 380);
-    const diag = Math.hypot(w, hgt);
-    root.append(note);
-
-    function draw() {
-      if (distances.length >= targets.length) return ctx.submit({ distances });
-      note.textContent = `Target ${distances.length + 1} of ${targets.length}`;
-      const t = targets[distances.length];
-      g.clearRect(0, 0, w, hgt);
-      const cx = t.x * w;
-      const cy = t.y * hgt;
-      for (const [r, col] of [[26, '#ff5470'], [17, '#eef0ff'], [8, '#ff5470'], [2, '#eef0ff']]) {
-        g.beginPath();
-        g.arc(cx, cy, r, 0, Math.PI * 2);
-        g.fillStyle = col;
-        g.fill();
-      }
-    }
-    canvas.addEventListener('pointerdown', (e) => {
-      if (distances.length >= targets.length) return;
-      const t = targets[distances.length];
-      const p = canvasPos(canvas, e);
-      // Normalized by the play-area diagonal — a 27" monitor and a phone
-      // play the same game (spec §6.3 game 12).
-      distances.push(Math.hypot(p.x - t.x * w, p.y - t.y * hgt) / diag);
-      draw();
-    });
-    draw();
-    return { collect: () => (distances.length ? { distances } : null) };
   },
 };
 
@@ -698,180 +571,293 @@ GameClients.spacemash = {
     return { collect: () => ({ count: counter.count, flagged: counter.flagged }) };
   },
 };
-
-// ---- 15. Slingshot ---------------------------------------------------------
+// ---- 12. Slingshot (3D) -----------------------------------------------------
+// Real 3D scene (three.js, vendored) with deterministic projectile physics:
+// fixed-timestep integration, gravity, bounce and roll. No aim assists — you
+// judge power and direction by eye, like a real slingshot. Scoring: resting
+// distance from the bullseye (ft).
 
 GameClients.slingshot = {
-  intro: 'Drag back, aim, release. 45° launch — power and left/right are yours. Watch the wind: it changes every shot. Best of 5 counts.',
+  intro: 'Drag anywhere to pull the pouch back — like a real slingshot, pull right to fire left. Release to shoot. The ball bounces and rolls; closest resting spot to the bullseye counts. Best of 5.',
   start(root, ctx) {
-    const { winds, distance: D, shots: SHOTS, rings } = ctx.data;
-    const { canvas, ctx: g, w, hgt } = makeCanvas(root, 420);
-    const note = h('p', { class: 'trial-note center' });
-    root.append(note);
+    const { distance: D, shots: SHOTS, rings } = ctx.data;
 
-    // Deterministic physics (spec §6.3 game 15): 45° elevation fixed, so a
-    // 2-DoF drag maps cleanly to (power, lateral aim). No randomness here —
-    // winds come pre-seeded from the server, identical for every player.
-    const GRAV = 32.2;             // ft/s²
+    // World units are feet: +z downrange to the target, +x right, +y up.
+    const GRAV = 32.2;
     const MIN_POWER = 18;
     const MAX_POWER = 75;
-    const MAX_DRAG = hgt * 0.38;   // px
-    const anchor = { x: w / 2, y: hgt - 40 };
-    const landings = [];           // {lat, fwd, dist}
+    const ELEV = Math.PI / 4;      // fixed 45° elevation — power and aim are yours
+    const RESTITUTION = 0.3;
+    const FRICTION = 0.45;         // horizontal speed kept per bounce (grass, not ice)
+    const ROLL_DECEL = 22;         // ft/s² while rolling on the ground
+    const STOP_SPEED = 1.2;        // ft/s — slower than this on the ground = at rest
+    const BALL_R = 0.35;
+    const DT = 1 / 120;            // fixed physics step → same result on every device
+    const POUCH_HOME = { x: 0, y: 3.0, z: 0 };
+    const MAX_DRAG = 190;          // px of pull — big range = fine power control
+    const AIM_PX_PER_RAD = 300;    // px of sideways pull per radian of aim
+    const MAX_AZ = 0.6;            // rad — max sideways aim
+
+    const note = h('p', { class: 'trial-note center' }, 'Loading 3D scene…');
+    root.append(note);
+
     let shot = 0;
     let best = null;
-    let dragging = false;
-    let dragPt = null;
-    let animating = false;
+    let disposed = false;
 
-    function landingFor(pull, wind) {
-      const mag = Math.min(Math.hypot(pull.x, pull.y), MAX_DRAG);
-      const v0 = MIN_POWER + (MAX_POWER - MIN_POWER) * (mag / MAX_DRAG);
-      const theta = Math.atan2(-pull.x, pull.y); // pull down-left → aim up-right
-      const flightTime = (2 * v0 * Math.SQRT1_2) / GRAV;
-      const range = (v0 * v0) / GRAV;
-      const fwd = range * Math.cos(theta);
-      const lat = range * Math.sin(theta) + wind * flightTime;
-      return { fwd, lat, dist: Math.hypot(lat, fwd - D), flightTime };
-    }
-
-    // pseudo-3D ground projection
-    const NEAR = 35;
-    const py = (d) => hgt - 40 - (hgt - 110) * (d / (d + NEAR));
-    const scale = (d) => NEAR / (d + NEAR);
-    const px = (lat, d) => w / 2 + lat * 9 * scale(d);
-
-    function draw() {
-      g.clearRect(0, 0, w, hgt);
-      // ground + horizon
-      g.fillStyle = '#141830';
-      g.fillRect(0, 0, w, py(1e6));
-      g.fillStyle = '#1a2140';
-      g.fillRect(0, py(1e6), w, hgt);
-      // target rings (far to near)
-      const cols = ['#58121f', '#8a1e33', '#c23b52', '#ff5470'];
-      [...rings].sort((a, b) => b - a).forEach((r, i) => {
-        g.beginPath();
-        g.ellipse(px(0, D), py(D), r * 9 * scale(D), r * 3.6 * scale(D), 0, 0, Math.PI * 2);
-        g.fillStyle = cols[i % cols.length];
-        g.fill();
-      });
-      g.beginPath();
-      g.ellipse(px(0, D), py(D), 2.2, 1.4, 0, 0, Math.PI * 2);
-      g.fillStyle = '#fff';
-      g.fill();
-      // ghost markers for previous shots
-      landings.forEach((L, i) => {
-        g.beginPath();
-        g.arc(px(L.lat, L.fwd), py(Math.max(L.fwd, 0.1)), 5 * Math.max(scale(L.fwd), 0.25) + 2, 0, Math.PI * 2);
-        g.fillStyle = i === landings.length - 1 ? '#ffc555' : 'rgba(255,197,85,0.45)';
-        g.fill();
-      });
-      // wind arrow
-      if (shot < SHOTS) {
-        const wind = winds[shot];
-        g.font = '16px system-ui';
-        g.fillStyle = '#eef0ff';
-        const arrow = wind >= 0 ? '→' : '←';
-        g.fillText(`wind ${arrow} ${Math.abs(wind).toFixed(1)} ft/s`, 14, 24);
-        g.strokeStyle = '#5c9dff';
-        g.lineWidth = 3;
-        g.beginPath();
-        g.moveTo(w / 2 - wind * 4, 40);
-        g.lineTo(w / 2 + wind * 4, 40);
-        g.stroke();
-        g.beginPath();
-        const tip = w / 2 + wind * 4;
-        g.moveTo(tip, 40);
-        g.lineTo(tip - Math.sign(wind || 1) * 8, 34);
-        g.moveTo(tip, 40);
-        g.lineTo(tip - Math.sign(wind || 1) * 8, 46);
-        g.stroke();
-      }
-      // slingshot + rubber band
-      g.strokeStyle = '#8a6b3f';
-      g.lineWidth = 7;
-      g.beginPath();
-      g.moveTo(anchor.x - 16, anchor.y + 26);
-      g.lineTo(anchor.x - 12, anchor.y);
-      g.moveTo(anchor.x + 16, anchor.y + 26);
-      g.lineTo(anchor.x + 12, anchor.y);
-      g.stroke();
-      if (dragging && dragPt) {
-        g.strokeStyle = '#d8b073';
-        g.lineWidth = 3;
-        g.beginPath();
-        g.moveTo(anchor.x - 12, anchor.y);
-        g.lineTo(dragPt.x, dragPt.y);
-        g.lineTo(anchor.x + 12, anchor.y);
-        g.stroke();
-        g.beginPath();
-        g.arc(dragPt.x, dragPt.y, 8, 0, Math.PI * 2);
-        g.fillStyle = '#eef0ff';
-        g.fill();
-        // aim preview line (direction only — power is the drag length)
-        const pull = { x: dragPt.x - anchor.x, y: dragPt.y - anchor.y };
-        if (pull.y > 6) {
-          const L = landingFor(pull, 0);
-          g.strokeStyle = 'rgba(238,240,255,0.25)';
-          g.setLineDash([5, 6]);
-          g.beginPath();
-          g.moveTo(anchor.x, anchor.y);
-          g.lineTo(px(L.lat, L.fwd), py(Math.max(L.fwd, 0.1)));
-          g.stroke();
-          g.setLineDash([]);
-        }
-      }
-      note.textContent = shot < SHOTS
-        ? `Shot ${shot + 1} of ${SHOTS} — target ${D} ft away${best != null ? ` · best: ${best.toFixed(1)} ft` : ''}`
-        : `Done — best: ${best != null ? best.toFixed(1) : '—'} ft`;
-    }
-
-    canvas.addEventListener('pointerdown', (e) => {
-      if (shot >= SHOTS || animating) return;
-      dragging = true;
-      canvas.setPointerCapture(e.pointerId);
-      dragPt = canvasPos(canvas, e);
-      draw();
-    });
-    canvas.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      dragPt = canvasPos(canvas, e);
-      draw();
-    });
-    canvas.addEventListener('pointerup', () => {
-      if (!dragging) return;
-      dragging = false;
-      const pull = { x: dragPt.x - anchor.x, y: dragPt.y - anchor.y };
-      if (pull.y < 12) { draw(); return; } // too small to be a real draw
-      const wind = winds[shot];
-      const L = landingFor(pull, wind);
-      shot++;
-      animating = true;
-      const t0 = performance.now();
-      const dur = 650;
-      const anim = () => {
-        const t = Math.min(1, (performance.now() - t0) / dur);
-        draw();
-        const d = L.fwd * t;
-        const lat = L.lat * t;
-        const arc = Math.sin(t * Math.PI) * 60 * scale(d);
-        g.beginPath();
-        g.arc(px(lat, Math.max(d, 0.1)), py(Math.max(d, 0.1)) - arc, 6 * Math.max(scale(d), 0.3) + 2, 0, Math.PI * 2);
-        g.fillStyle = '#eef0ff';
-        g.fill();
-        if (t < 1) requestAnimationFrame(anim);
-        else {
-          landings.push(L);
-          best = best == null ? L.dist : Math.min(best, L.dist);
-          animating = false;
-          if (shot >= SHOTS) ctx.submit({ best });
-          draw();
-        }
+    // Deterministic flight: integrate the whole path up front with the fixed
+    // timestep, then animate along it.
+    function simulate(v0, az) {
+      const p = { ...POUCH_HOME };
+      const v = {
+        x: v0 * Math.cos(ELEV) * Math.sin(az),
+        y: v0 * Math.sin(ELEV),
+        z: v0 * Math.cos(ELEV) * Math.cos(az),
       };
-      anim();
-    });
-    draw();
-    return { collect: () => (best != null ? { best } : null) };
+      const pts = [{ ...p }];
+      let rolling = false;
+      let t = 0;
+      while (t < 12) {
+        if (!rolling) v.y -= GRAV * DT;
+        p.x += v.x * DT;
+        p.y += v.y * DT;
+        p.z += v.z * DT;
+        if (p.y <= BALL_R) {
+          p.y = BALL_R;
+          const hSpeed = Math.hypot(v.x, v.z);
+          if (!rolling && v.y < -3) {
+            v.y = -v.y * RESTITUTION;       // bounce
+            v.x *= FRICTION;
+            v.z *= FRICTION;
+          } else {
+            rolling = true;                 // too flat to bounce — roll it out
+            v.y = 0;
+            if (hSpeed <= STOP_SPEED) break;
+            const k = Math.max(0, 1 - (ROLL_DECEL * DT) / hSpeed);
+            v.x *= k;
+            v.z *= k;
+          }
+        }
+        pts.push({ ...p });
+        t += DT;
+      }
+      return { pts, rest: { x: p.x, z: p.z } };
+    }
+
+    const launchFrom = (drag) => {
+      const pull = Math.min(Math.max(drag.y, 0), MAX_DRAG);
+      const power = pull / MAX_DRAG;
+      return {
+        power,
+        v0: MIN_POWER + (MAX_POWER - MIN_POWER) * power,
+        // Real slingshot mirror: pull back-right → ball fires screen-LEFT.
+        // The camera looks down +z, which renders world +x on the screen's
+        // left, so screen-left = world +x → az goes WITH drag.x here while
+        // the pouch (world -x) visually follows the drag.
+        az: clamp(drag.x / AIM_PX_PER_RAD, -MAX_AZ, MAX_AZ),
+      };
+    };
+
+    import('/vendor/three.module.js')
+      .then((THREE) => { if (!disposed) buildScene(THREE); })
+      .catch(() => { note.textContent = 'Could not load the 3D engine — try reloading.'; });
+
+    function buildScene(THREE) {
+      const w = Math.min(root.clientWidth || 680, 680);
+      const hgt = Math.min(420, availHeight(root, 50));
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(w, hgt);
+      renderer.domElement.className = 'game';
+      renderer.domElement.style.touchAction = 'none';
+      root.insertBefore(renderer.domElement, note);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0d1024);
+      scene.fog = new THREE.Fog(0x0d1024, D * 2, D * 4 + 250);
+
+      const camera = new THREE.PerspectiveCamera(55, w / hgt, 0.1, 2000);
+      camera.position.set(0, 9, -16);
+      camera.lookAt(0, 1, D * 0.7);
+
+      scene.add(new THREE.HemisphereLight(0xbfd0ff, 0x141830, 1.15));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+      sun.position.set(-40, 80, -30);
+      scene.add(sun);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(1400, 1400),
+        new THREE.MeshLambertMaterial({ color: 0x1a2140 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+      const grid = new THREE.GridHelper(1400, 70, 0x2a3160, 0x222a52);
+      grid.position.y = 0.02;
+      scene.add(grid);
+
+      // Target: concentric rings flat on the ground, outer first (lowest).
+      const ringCols = [0x58121f, 0x8a1e33, 0xc23b52, 0xff5470];
+      [...rings].sort((a, b) => b - a).forEach((r, i) => {
+        const ring = new THREE.Mesh(
+          new THREE.CircleGeometry(r, 56),
+          new THREE.MeshBasicMaterial({ color: ringCols[i % ringCols.length] })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(0, 0.03 + i * 0.012, D);
+        scene.add(ring);
+      });
+      const bull = new THREE.Mesh(
+        new THREE.CircleGeometry(0.55, 24),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      bull.rotation.x = -Math.PI / 2;
+      bull.position.set(0, 0.03 + rings.length * 0.012 + 0.01, D);
+      scene.add(bull);
+
+      // Slingshot: stem + two angled fork arms.
+      const wood = new THREE.MeshLambertMaterial({ color: 0x8a6b3f });
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 1.7, 10), wood);
+      stem.position.set(0, 0.85, 0);
+      scene.add(stem);
+      const forkTips = [];
+      for (const side of [-1, 1]) {
+        const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 2.0, 10), wood);
+        arm.position.set(side * 0.6, 2.4, 0);
+        arm.rotation.z = -side * 0.55;
+        scene.add(arm);
+        forkTips.push(new THREE.Vector3(side * 1.1, 3.2, 0));
+      }
+
+      const bandMat = new THREE.LineBasicMaterial({ color: 0xd8b073 });
+      const bands = forkTips.map(() => {
+        const line = new THREE.Line(new THREE.BufferGeometry(), bandMat);
+        scene.add(line);
+        return line;
+      });
+      const pouch = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 16, 12),
+        new THREE.MeshLambertMaterial({ color: 0xffc555 })
+      );
+      scene.add(pouch);
+
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(BALL_R, 20, 14),
+        new THREE.MeshLambertMaterial({ color: 0xeef0ff })
+      );
+      ball.visible = false;
+      scene.add(ball);
+
+      const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffc555 });
+      const setBands = (target) => {
+        bands.forEach((line, i) => {
+          line.geometry.setFromPoints([forkTips[i], target]);
+        });
+      };
+      const pouchFor = (drag) => {
+        const { power } = launchFrom(drag);
+        // Same screen mapping as the azimuth: world -x renders screen-right.
+        return new THREE.Vector3(
+          clamp(-drag.x / 45, -2.4, 2.4),
+          POUCH_HOME.y - power * 1.1,
+          POUCH_HOME.z - power * 4.5
+        );
+      };
+
+      // ---- input ------------------------------------------------------------
+      const canvas = renderer.domElement;
+      let dragging = false;
+      let dragStart = null;
+      let drag = { x: 0, y: 0 };
+      let flight = null; // { pts, rest, startedAt }
+
+      const updateAim = () => {
+        const { power } = launchFrom(drag);
+        const pouchPos = pouchFor(drag);
+        pouch.position.copy(pouchPos);
+        setBands(pouchPos);
+        hud(power > 0.03 ? `power ${(power * 100).toFixed(0)}%` : undefined);
+      };
+
+      const resetPouch = () => {
+        pouch.position.set(POUCH_HOME.x, POUCH_HOME.y, POUCH_HOME.z);
+        setBands(pouch.position);
+      };
+
+      canvas.addEventListener('pointerdown', (e) => {
+        if (shot >= SHOTS || flight) return;
+        dragging = true;
+        dragStart = canvasPos(canvas, e);
+        drag = { x: 0, y: 0 };
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+        updateAim();
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const p = canvasPos(canvas, e);
+        drag = { x: p.x - dragStart.x, y: p.y - dragStart.y };
+        updateAim();
+      });
+      canvas.addEventListener('pointerup', () => {
+        if (!dragging) return;
+        dragging = false;
+        const { v0, az, power } = launchFrom(drag);
+        if (power < 0.06) { resetPouch(); hud(); return; } // too soft — treat as cancel
+        const sim = simulate(v0, az);
+        flight = { ...sim, startedAt: performance.now() };
+        ball.visible = true;
+        resetPouch();
+      });
+
+      // ---- per-frame --------------------------------------------------------
+      function hud(extra) {
+        if (shot >= SHOTS) {
+          note.textContent = `Done — best: ${best != null ? best.toFixed(1) : '—'} ft from the bullseye`;
+          return;
+        }
+        note.textContent =
+          `Shot ${shot + 1} of ${SHOTS} · target ${D} ft` +
+          (best != null ? ` · best ${best.toFixed(1)} ft` : '') +
+          (extra ? ` · ${extra}` : '');
+      }
+
+      function settleShot(rest) {
+        const dist = Math.hypot(rest.x, rest.z - D);
+        best = best == null ? dist : Math.min(best, dist);
+        const ghost = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 8), ghostMat);
+        ghost.position.set(rest.x, BALL_R, rest.z);
+        scene.add(ghost);
+        shot++;
+        hud(`landed ${dist.toFixed(1)} ft away`);
+        if (shot >= SHOTS) {
+          setTimeout(() => { if (!disposed) ctx.submit({ best }); }, 900);
+        }
+      }
+
+      function frame() {
+        if (disposed || !canvas.isConnected) return;
+        if (flight) {
+          const idx = Math.floor((performance.now() - flight.startedAt) / 1000 / DT);
+          if (idx >= flight.pts.length) {
+            ball.visible = false;
+            const { rest } = flight;
+            flight = null;
+            settleShot(rest);
+          } else {
+            const p = flight.pts[idx];
+            ball.position.set(p.x, p.y, p.z);
+          }
+        }
+        renderer.render(scene, camera);
+        requestAnimationFrame(frame);
+      }
+
+      resetPouch();
+      hud();
+      frame();
+    }
+
+    return {
+      collect: () => (best != null ? { best } : null),
+    };
   },
 };

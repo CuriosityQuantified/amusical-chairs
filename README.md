@@ -16,30 +16,29 @@ npm start          # http://localhost:3000
 
 - **Host:** open `/host.html`, create a room, project the screen.
 - **Players:** scan the QR / open `/?code=XXXX`, enter a name.
-- Host config (games per round, durations, per-game toggles, practice round)
-  lives in the lobby screen.
+- Host config (durations, per-game toggles, practice round) lives in the
+  lobby screen.
 
 ```bash
 npm test           # unit tests + 20-bot end-to-end harness
 ```
 
-## How a round works
+## How a game works
 
-1. Music plays on the host screen, then stops.
-2. All survivors simultaneously play `m` minigames (default 2, hard cap 3) —
-   drawn from a 15-game roster across 6 categories, never repeating a game in
-   a session and never two of one category in a round.
-3. Raw metrics are normalized per game to 0–1000 **within the round, across
-   only the players who played it** (P90/P10 outlier clamps; no rank-summing).
-4. Top half get a seat. Bottom half go to **redemption**: a clock-synced
-   reaction test; exactly one is saved.
-5. Ties at the cut line all go to redemption — never a coin flip.
-6. Eliminated players vote on the next round's minigame set.
-7. Repeat until 3 remain → one final minigame decides the winner.
+Score attack — no elimination:
 
-The elimination ladder (`shared/ladder.js`) is unit-tested to strictly
-decrease and terminate for every player count from 3 to 40 — e.g.
-`20 → 11 → 7 → 5 → 3 → final`.
+1. Every enabled minigame (11-game roster across 6 categories) is played
+   exactly once, by **all players simultaneously**, in a seeded-shuffled
+   order. Music + circling avatars play between games.
+2. Raw metrics are normalized per game to 0–1000 **across only the players
+   who played it** (P90/P10 outlier clamps; no rank-summing). Non-submitters
+   score 0 for that game but stay in.
+3. After every game, each player sees their raw result, points earned,
+   running total, and rank; the host screen shows the full leaderboard.
+4. The finale is **musical chairs**: a clock-synced reaction test everyone
+   plays at once. Penalized reaction time is normalized 0–1000 like any
+   other game.
+5. Highest cumulative total wins.
 
 ## Anti-cheat details worth knowing
 
@@ -60,16 +59,17 @@ decrease and terminate for every player count from 3 to 40 — e.g.
 - Node 20 + Express + **Socket.IO** (persistent websockets — the clock sync
   depends on them). Client is vanilla JS + Canvas, no build step.
 - **All state in memory. No database.** Sessions are ephemeral by design.
-- Reconnects: `playerId` persists in `localStorage`; a dropped player is never
-  eliminated for a wifi hiccup — missed submissions just take the P90 clamp.
-- `shared/` holds pure logic (ladder, normalization, redemption state
-  machine, press counter, clustering, CIEDE2000) served unmodified to the
+- Reconnects: `playerId` persists in `localStorage`; a dropped player never
+  loses their identity or score for a wifi hiccup — missed submissions
+  simply score 0 for that game.
+- `shared/` holds pure logic (normalization, redemption state machine,
+  press counter, CIEDE2000) served unmodified to the
   browser and imported directly by server + tests.
 
 ```
 server/   express + socket wiring, room state machine, game metrics
 shared/   pure logic used by server, client, and tests
-public/   host screen, player screen, 15 minigame clients, price asset pack
+public/   host screen, player screen, 11 minigame clients
 test/     unit tests + room integration + 20-headless-bot harness
 ```
 
@@ -83,6 +83,6 @@ behind a Cloudflare Tunnel.
 
 ## Out of scope (by design)
 
-Accounts, persistence, cross-session leaderboards, native apps, spectators
-beyond eliminated players, anything requiring pre-gathered player data, and
+Accounts, persistence, cross-session leaderboards, native apps, spectators,
+anything requiring pre-gathered player data, and
 any turn-based mechanic whatsoever.
