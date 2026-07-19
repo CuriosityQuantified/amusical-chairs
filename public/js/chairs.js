@@ -20,7 +20,8 @@ export function startChairs(container, { names = [], chairs = 1, size = 320 } = 
   const cy = size / 2;
   const rChairs = size * 0.16;
   const rWalk = size * 0.36;
-  const colorFor = (i) => `hsl(${(i * 137) % 360} 65% 55%)`;
+  const NEON = ['#00e5ff', '#ff2d95', '#ffd23d', '#3dff9e', '#a06bff', '#ff5470'];
+  const colorFor = (i) => NEON[i % NEON.length];
 
   let running = true;
   let raf = null;
@@ -34,7 +35,7 @@ export function startChairs(container, { names = [], chairs = 1, size = 320 } = 
     // walking track
     g.beginPath();
     g.arc(cx, cy, rWalk, 0, Math.PI * 2);
-    g.strokeStyle = 'rgba(238,240,255,0.12)';
+    g.strokeStyle = 'rgba(0,229,255,0.18)';
     g.setLineDash([4, 8]);
     g.lineWidth = 2;
     g.stroke();
@@ -67,7 +68,7 @@ export function startChairs(container, { names = [], chairs = 1, size = 320 } = 
       g.fillStyle = '#fff';
       g.font = '700 13px system-ui';
       g.fillText((String(names[i] || '?')[0] || '?').toUpperCase(), x, y + 0.5);
-      g.fillStyle = 'rgba(238,240,255,0.85)';
+      g.fillStyle = 'rgba(217,250,255,0.85)';
       g.font = '10px system-ui';
       g.fillText(String(names[i] || '').slice(0, 9), x, y + 24);
     }

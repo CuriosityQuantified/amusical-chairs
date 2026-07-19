@@ -4,9 +4,9 @@
 // plain math (no seeded rng) is fine.
 
 const C = {
-  ink: '#eef0ff', muted: '#9aa1c7', accent: '#7c5cff',
-  good: '#22d3a5', bad: '#ff5470', warn: '#ffc555',
-  panel: '#171b31', line: '#3a4178',
+  ink: '#d9faff', muted: '#7fb8cc', accent: '#ff2d95', cyan: '#00e5ff',
+  good: '#3dff9e', bad: '#ff5470', warn: '#ffd23d',
+  panel: '#0a141c', line: '#16303f',
 };
 
 const lerp = (a, b, p) => a + (b - a) * p;
@@ -103,7 +103,7 @@ const TUTORIALS = {
         box(g, w / 2 + 16, 22, w / 2 - 40, 44, `rgb(${mix[0]},${mix[1]},${mix[2]})`);
         text(g, 'TARGET', 24 + (w / 2 - 40) / 2, 78);
         text(g, 'YOURS', w / 2 + 16 + (w / 2 - 40) / 2, 78);
-        ['#ff5470', '#22d3a5', '#5c9dff'].forEach((col, i) => {
+        ['#ff5470', '#3dff9e', '#00e5ff'].forEach((col, i) => {
           const y = 110 + i * 28;
           box(g, 34, y - 3, w - 68, 6, C.line);
           const kx = 34 + (w - 68) * lerp(chans[i][0], chans[i][1], m) / 255;
@@ -169,7 +169,7 @@ const TUTORIALS = {
       draw(g, w, h, p) {
         text(g, 'Tap at 30%', w / 2, 34, { size: 20, color: C.ink, bold: true });
         const pad = 40, y = 110;
-        g.strokeStyle = C.ink; g.lineWidth = 4;
+        g.strokeStyle = C.cyan; g.lineWidth = 4;
         g.beginPath(); g.moveTo(pad, y); g.lineTo(w - pad, y); g.stroke();
         for (const x of [pad, w - pad]) { g.beginPath(); g.moveTo(x, y - 14); g.lineTo(x, y + 14); g.stroke(); }
         text(g, '0%', pad, y + 32); text(g, '100%', w - pad, y + 32);
@@ -186,7 +186,7 @@ const TUTORIALS = {
       draw(g, w, h, p) {
         text(g, 'Tap at 30%', w / 2, 34, { size: 20, color: C.ink, bold: true });
         const pad = 40, y = 110;
-        g.strokeStyle = C.ink; g.lineWidth = 4;
+        g.strokeStyle = C.cyan; g.lineWidth = 4;
         g.beginPath(); g.moveTo(pad, y); g.lineTo(w - pad, y); g.stroke();
         const target = pad + (w - 2 * pad) * 0.3;
         const guess = pad + (w - 2 * pad) * 0.62;
@@ -208,7 +208,7 @@ const TUTORIALS = {
     { ok: true, dur: 4200, label: 'Follow the outline closely — cover the whole shape',
       draw(g, w, h, p) {
         const pts = starPts(w / 2, h / 2 + 6, 74);
-        drawPolyline(g, pts, 1, C.line, 7);
+        drawPolyline(g, pts, 1, 'rgba(255,45,149,0.85)', 7);
         const m = seg(p, 0.05, 0.85);
         drawPolyline(g, pts, m, C.good, 3);
         const idx = Math.min(pts.length - 1, Math.floor(pts.length * m));
@@ -217,7 +217,7 @@ const TUTORIALS = {
     { ok: false, dur: 3400, label: 'Sloppy scribbles and skipped corners cost points',
       draw(g, w, h, p) {
         const pts = starPts(w / 2, h / 2 + 6, 74);
-        drawPolyline(g, pts, 1, C.line, 7);
+        drawPolyline(g, pts, 1, 'rgba(255,45,149,0.85)', 7);
         const m = seg(p, 0.05, 0.8);
         const n = Math.max(2, Math.floor(80 * m));
         g.strokeStyle = C.bad; g.lineWidth = 3; g.lineJoin = g.lineCap = 'round';
@@ -314,7 +314,7 @@ const TUTORIALS = {
           const y = gy + Math.floor(i / 5) * (size + gap);
           const inPat = pattern.includes(i);
           const isPicked = !showing && inPat && pattern.indexOf(i) < picked;
-          box(g, x, y, size, size, showing && inPat ? C.accent : isPicked ? C.good : C.panel, C.line);
+          box(g, x, y, size, size, showing && inPat ? C.cyan : isPicked ? C.accent : C.panel, C.line);
         }
         text(g, showing ? 'memorize!' : 'now tap what was lit', w / 2, h - 16, { size: 15 });
         if (!showing && picked < pattern.length) {
@@ -348,7 +348,7 @@ const TUTORIALS = {
         if (p < 0.45) {
           box(g, w / 2 - 110, 60, 100, 42, p > 0.3 ? C.good : C.accent);
           text(g, 'YES', w / 2 - 60, 81, { size: 17, color: '#fff', bold: true });
-          box(g, w / 2 + 10, 60, 100, 42, '#343b6e');
+          box(g, w / 2 + 10, 60, 100, 42, '#0f2430');
           text(g, 'NO', w / 2 + 60, 81, { size: 17, color: '#fff', bold: true });
           const m = seg(p, 0.05, 0.3);
           cursor(g, lerp(w / 2, w / 2 - 60, m), lerp(h - 30, 88, m), p > 0.3 && p < 0.42);
@@ -415,7 +415,7 @@ const TUTORIALS = {
     { ok: false, dur: 3400, label: 'Holding the button does nothing — release between presses',
       draw(g, w, h, p) {
         text(g, '1', w / 2, 52, { size: 46, color: C.bad, bold: true });
-        box(g, w / 2 - 100, 96, 200, 62, '#343b6e');
+        box(g, w / 2 - 100, 96, 200, 62, '#0f2430');
         text(g, 'HELD DOWN…', w / 2, 127, { size: 20, color: C.muted, bold: true });
         cursor(g, w / 2 + 24, 144, true);
         if (p > 0.5) text(g, 'still 1 — holding scores nothing', w / 2, h - 14, { size: 15, color: C.bad, bold: true });
@@ -430,7 +430,7 @@ const TUTORIALS = {
         g.beginPath(); g.moveTo(10, groundY); g.lineTo(w - 10, groundY); g.stroke();
         // target rings on the right
         const tx = w - 70;
-        ['#8a1e33', '#c23b52', '#ff5470'].forEach((col, i) => {
+        ['#ff2d95', '#ffd23d', '#00e5ff'].forEach((col, i) => {
           g.fillStyle = col;
           g.beginPath(); g.ellipse(tx, groundY, 44 - i * 14, 10 - i * 3, 0, 0, Math.PI * 2); g.fill();
         });
@@ -438,7 +438,7 @@ const TUTORIALS = {
         g.beginPath(); g.ellipse(tx, groundY, 4, 2, 0, 0, Math.PI * 2); g.fill();
         // slingshot fork
         const sx = 54;
-        g.strokeStyle = '#8a6b3f'; g.lineWidth = 5;
+        g.strokeStyle = '#d8a339'; g.lineWidth = 5;
         g.beginPath(); g.moveTo(sx, groundY); g.lineTo(sx, groundY - 40);
         g.moveTo(sx, groundY - 40); g.lineTo(sx - 12, groundY - 58);
         g.moveTo(sx, groundY - 40); g.lineTo(sx + 12, groundY - 58);
@@ -447,7 +447,7 @@ const TUTORIALS = {
         const flight = seg(p, 0.45, 0.85);
         if (p < 0.45) {
           const px = sx - pull * 30, py = groundY - 48 + pull * 18;
-          g.strokeStyle = '#d8b073'; g.lineWidth = 2;
+          g.strokeStyle = '#ffd23d'; g.lineWidth = 2;
           g.beginPath(); g.moveTo(sx - 12, groundY - 58); g.lineTo(px, py);
           g.moveTo(sx + 12, groundY - 58); g.lineTo(px, py); g.stroke();
           g.fillStyle = C.warn;
@@ -468,12 +468,12 @@ const TUTORIALS = {
         g.strokeStyle = C.line; g.lineWidth = 2;
         g.beginPath(); g.moveTo(10, groundY); g.lineTo(w - 10, groundY); g.stroke();
         const tx = w - 110;
-        ['#8a1e33', '#c23b52', '#ff5470'].forEach((col, i) => {
+        ['#ff2d95', '#ffd23d', '#00e5ff'].forEach((col, i) => {
           g.fillStyle = col;
           g.beginPath(); g.ellipse(tx, groundY, 40 - i * 13, 9 - i * 3, 0, 0, Math.PI * 2); g.fill();
         });
         const sx = 54;
-        g.strokeStyle = '#8a6b3f'; g.lineWidth = 5;
+        g.strokeStyle = '#d8a339'; g.lineWidth = 5;
         g.beginPath(); g.moveTo(sx, groundY); g.lineTo(sx, groundY - 40); g.stroke();
         const pull = seg(p, 0.05, 0.3);
         const flight = seg(p, 0.35, 0.85);
@@ -500,7 +500,7 @@ const TUTORIALS = {
         g.fillStyle = green ? C.good : '#58121f';
         g.beginPath(); g.arc(w / 2, h / 2 - 8, 62, 0, Math.PI * 2); g.fill();
         g.strokeStyle = C.line; g.lineWidth = 6; g.stroke();
-        text(g, green ? 'GO!' : 'WAIT…', w / 2, h / 2 - 8, { size: 22, color: green ? '#04302a' : C.ink, bold: true });
+        text(g, green ? 'GO!' : 'WAIT…', w / 2, h / 2 - 8, { size: 22, color: green ? '#042a18' : C.ink, bold: true });
         cursor(g, w / 2 + 80, h / 2 + 40, green && p > 0.6 && p < 0.75);
         if (p > 0.65) text(g, '212 ms', w / 2, h - 18, { size: 18, color: C.good, bold: true });
       } },
@@ -568,7 +568,7 @@ export function startTutorialAnim(root, key) {
     const p = t / st.dur;
     g.clearRect(0, 0, w, hgt);
     rr(g, 0, 0, w, hgt, 12);
-    g.fillStyle = '#12152a';
+    g.fillStyle = '#060b12';
     g.fill();
     st.draw(g, w, hgt, p);
     stamp(g, w, st.ok, p);

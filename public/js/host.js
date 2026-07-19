@@ -479,7 +479,7 @@ function confetti() {
   const parts = [...Array(180)].map(() => ({
     x: Math.random() * c.width, y: -20 - Math.random() * c.height,
     v: 2 + Math.random() * 4, r: 3 + Math.random() * 5,
-    col: ['#7c5cff', '#22d3a5', '#ffc555', '#ff5470'][Math.floor(Math.random() * 4)],
+    col: ['#00e5ff', '#ff2d95', '#ffd23d', '#3dff9e'][Math.floor(Math.random() * 4)],
     w: Math.random() * 2 - 1,
   }));
   let frames = 0;

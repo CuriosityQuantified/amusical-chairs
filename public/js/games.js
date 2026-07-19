@@ -86,7 +86,7 @@ GameClients.rgb = {
     root.append(
       h('p', {}, 'Target:'), target,
       h('p', {}, 'Yours:'), preview,
-      sliderRow('r', '#ff5470'), sliderRow('g', '#22d3a5'), sliderRow('b', '#5c9dff'),
+      sliderRow('r', '#ff5470'), sliderRow('g', '#3dff9e'), sliderRow('b', '#00e5ff'),
       h('div', { style: { marginTop: '12px' } },
         h('button', { class: 'big', onclick: () => ctx.submit({ ...cur }) }, 'Lock it in'))
     );
@@ -161,13 +161,16 @@ GameClients.bisect = {
 
     function draw() {
       g.clearRect(0, 0, w, 140);
-      g.strokeStyle = '#eef0ff';
+      g.shadowColor = '#00e5ff';
+      g.shadowBlur = 12;
+      g.strokeStyle = '#00e5ff';
       g.lineWidth = 4;
       g.beginPath(); g.moveTo(pad, 70); g.lineTo(w - pad, 70); g.stroke();
       for (const x of [pad, w - pad]) {
         g.beginPath(); g.moveTo(x, 50); g.lineTo(x, 90); g.stroke();
       }
-      g.fillStyle = '#9aa1c7';
+      g.shadowBlur = 0;
+      g.fillStyle = '#3d5a6b';
       g.font = '14px system-ui';
       g.fillText('0%', pad - 8, 110);
       g.fillText('100%', w - pad - 18, 110);
@@ -202,13 +205,17 @@ GameClients.trace = {
 
     function drawBase() {
       g.clearRect(0, 0, w, hgt);
-      g.strokeStyle = '#3a4178';
+      g.shadowColor = '#ff2d95';
+      g.shadowBlur = 16;
+      g.strokeStyle = 'rgba(255,45,149,0.85)';
       g.lineWidth = 8;
       g.lineJoin = g.lineCap = 'round';
       g.beginPath();
       path.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
       g.stroke();
-      g.strokeStyle = '#22d3a5';
+      g.shadowColor = '#3dff9e';
+      g.shadowBlur = 10;
+      g.strokeStyle = '#3dff9e';
       g.lineWidth = 3;
       g.beginPath();
       let started = false;
@@ -413,15 +420,18 @@ GameClients.dots = {
       input.value = '';
       const pts = layouts[guesses.length];
       g.clearRect(0, 0, w, hgt);
-      g.fillStyle = '#ffc555';
+      g.shadowColor = '#ffd23d';
+      g.shadowBlur = 8;
+      g.fillStyle = '#ffd23d';
       for (const p of pts) {
         g.beginPath();
         g.arc(p.x, p.y, 4, 0, Math.PI * 2);
         g.fill();
       }
+      g.shadowBlur = 0;
       setTimeout(() => {
         g.clearRect(0, 0, w, hgt);
-        g.fillStyle = '#9aa1c7';
+        g.fillStyle = '#7fb8cc';
         g.font = '22px system-ui';
         g.fillText('How many did you see?', w / 2 - 110, hgt / 2);
         note.textContent = `Jar ${guesses.length + 1} of ${counts.length} — your estimate?`;
@@ -582,7 +592,7 @@ GameClients.typing = {
       placeholder: 'Type here…',
     });
     root.append(
-      h('p', { style: { fontSize: '20px', lineHeight: '1.5', background: 'var(--bg2)', padding: '12px', borderRadius: '10px' } }, sentence),
+      h('p', { style: { fontSize: '20px', lineHeight: '1.5', background: 'var(--bg2)', padding: '12px', borderRadius: '4px', border: '1px solid var(--line)' } }, sentence),
       input,
       h('div', { style: { marginTop: '10px' } },
         h('button', { class: 'big', onclick: done }, 'Done'))
@@ -642,11 +652,15 @@ GameClients.spacemash = {
         phase = 'active';
         countEl.textContent = '0';
         btn.textContent = 'MASH!';
-        btn.style.background = 'var(--good)';
+        btn.style.background = 'var(--accent)';
+        btn.style.color = '#1a0512';
+        btn.style.boxShadow = '0 0 24px rgba(255, 45, 149, 0.4)';
         setTimeout(() => {
           phase = 'done';
           btn.textContent = 'TIME!';
           btn.style.background = '';
+          btn.style.color = '';
+          btn.style.boxShadow = '';
           document.removeEventListener('keydown', onKeydown);
           document.removeEventListener('keyup', onKeyup);
           ctx.submit({ count: counter.count, flagged: counter.flagged });
@@ -761,30 +775,30 @@ GameClients.slingshot = {
       root.insertBefore(renderer.domElement, note);
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0d1024);
-      scene.fog = new THREE.Fog(0x0d1024, D * 2, D * 4 + 250);
+      scene.background = new THREE.Color(0x05070d);
+      scene.fog = new THREE.Fog(0x05070d, D * 2, D * 4 + 250);
 
       const camera = new THREE.PerspectiveCamera(55, w / hgt, 0.1, 2000);
       camera.position.set(0, 9, -16);
       camera.lookAt(0, 1, D * 0.7);
 
-      scene.add(new THREE.HemisphereLight(0xbfd0ff, 0x141830, 1.15));
+      scene.add(new THREE.HemisphereLight(0xa8e6ff, 0x0a1420, 1.15));
       const sun = new THREE.DirectionalLight(0xffffff, 1.3);
       sun.position.set(-40, 80, -30);
       scene.add(sun);
 
       const ground = new THREE.Mesh(
         new THREE.PlaneGeometry(1400, 1400),
-        new THREE.MeshLambertMaterial({ color: 0x1a2140 })
+        new THREE.MeshLambertMaterial({ color: 0x0a141c })
       );
       ground.rotation.x = -Math.PI / 2;
       scene.add(ground);
-      const grid = new THREE.GridHelper(1400, 70, 0x2a3160, 0x222a52);
+      const grid = new THREE.GridHelper(1400, 70, 0x0e3a4a, 0x0a2833);
       grid.position.y = 0.02;
       scene.add(grid);
 
       // Target: concentric rings flat on the ground, outer first (lowest).
-      const ringCols = [0x58121f, 0x8a1e33, 0xc23b52, 0xff5470];
+      const ringCols = [0x531034, 0xff2d95, 0xffd23d, 0x00e5ff];
       [...rings].sort((a, b) => b - a).forEach((r, i) => {
         const ring = new THREE.Mesh(
           new THREE.CircleGeometry(r, 56),
@@ -803,7 +817,7 @@ GameClients.slingshot = {
       scene.add(bull);
 
       // Slingshot: stem + two angled fork arms.
-      const wood = new THREE.MeshLambertMaterial({ color: 0x8a6b3f });
+      const wood = new THREE.MeshLambertMaterial({ color: 0xd8a339 });
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 1.7, 10), wood);
       stem.position.set(0, 0.85, 0);
       scene.add(stem);
@@ -816,7 +830,7 @@ GameClients.slingshot = {
         forkTips.push(new THREE.Vector3(side * 1.1, 3.2, 0));
       }
 
-      const bandMat = new THREE.LineBasicMaterial({ color: 0xd8b073 });
+      const bandMat = new THREE.LineBasicMaterial({ color: 0xffd23d });
       const bands = forkTips.map(() => {
         const line = new THREE.Line(new THREE.BufferGeometry(), bandMat);
         scene.add(line);
@@ -824,7 +838,7 @@ GameClients.slingshot = {
       });
       const pouch = new THREE.Mesh(
         new THREE.SphereGeometry(0.28, 16, 12),
-        new THREE.MeshLambertMaterial({ color: 0xffc555 })
+        new THREE.MeshLambertMaterial({ color: 0xffd23d })
       );
       scene.add(pouch);
 
@@ -835,7 +849,7 @@ GameClients.slingshot = {
       ball.visible = false;
       scene.add(ball);
 
-      const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffc555 });
+      const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffd23d });
       const setBands = (target) => {
         bands.forEach((line, i) => {
           line.geometry.setFromPoints([forkTips[i], target]);
