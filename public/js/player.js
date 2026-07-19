@@ -238,8 +238,6 @@ function renderTutorial(p) {
       onclick: () => socket.emit('solo:skip', {}, () => {}),
     }, 'Skip ▸'));
   }
-  const localDeadline = p.deadline - state.offset;
-  showCountdown(performance.now() + (localDeadline - Date.now()), p.duration);
 }
 
 function startMinigame(payload) {

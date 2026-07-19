@@ -293,17 +293,6 @@ function renderTutorial(p) {
     el('p', { class: 'muted' }, 'Starting automatically… press Next ▸ to skip.')
   );
   hostTut = startTutorialAnim(demo, p.key);
-  const localDeadline = p.deadline - state.offset;
-  const bar = el('div', { class: 'countdown' }, el('div', { id: 'tut-bar' }));
-  content().append(bar);
-  const tick = () => {
-    const left = Math.max(0, localDeadline - Date.now());
-    const b = $('tut-bar');
-    if (!b) return;
-    b.style.width = `${(left / p.duration) * 100}%`;
-    if (left > 0 && state.phase === 'tutorial') requestAnimationFrame(tick);
-  };
-  tick();
 }
 
 // ---- minigame progress (count only, never live scores) ---------------------
