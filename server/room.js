@@ -361,7 +361,10 @@ export class Room {
     if (this.phase !== 'lobby') return { error: 'Finish the current game first.' };
     if (this.players.size < 1) return { error: 'Need at least 1 player joined to test.' };
     this.round = null;
-    this.startRedemption([...this.players.keys()], 'test');
+    this.startTutorial(
+      { key: 'chairs', gameName: 'Musical Chairs', test: true },
+      () => this.startRedemption([...this.players.keys()], 'test')
+    );
     return { ok: true };
   }
 

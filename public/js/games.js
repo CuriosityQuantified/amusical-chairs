@@ -679,9 +679,9 @@ GameClients.slingshot = {
     const BALL_R = 0.35;
     const DT = 1 / 120;            // fixed physics step → same result on every device
     const POUCH_HOME = { x: 0, y: 3.0, z: 0 };
-    const MAX_DRAG = 190;          // px of pull — big range = fine power control
-    const AIM_PX_PER_RAD = 300;    // px of sideways pull per radian of aim
-    const MAX_AZ = 0.6;            // rad — max sideways aim
+    const MAX_DRAG = 110;          // px of pull to full power — short throw = twitchy
+    const AIM_PX_PER_RAD = 55;     // px of sideways pull per radian — small wobbles matter
+    const MAX_AZ = 0.75;           // rad — max sideways aim
 
     const note = h('p', { class: 'trial-note center' }, 'Loading 3D scene…');
     root.append(note);
@@ -748,8 +748,11 @@ GameClients.slingshot = {
       .catch(() => { note.textContent = 'Could not load the 3D engine — try reloading.'; });
 
     function buildScene(THREE) {
-      const w = Math.min(root.clientWidth || 680, 680);
-      const hgt = Math.min(420, availHeight(root, 50));
+      // Fill the screen: full container width, and all the vertical room left
+      // below the header/intro (kept to a sane aspect so ultrawide monitors
+      // don't get a letterbox-thin strip of ground).
+      const w = root.clientWidth || 680;
+      const hgt = Math.max(240, Math.min(availHeight(root, 40), Math.round(w * 0.62)));
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(w, hgt);
