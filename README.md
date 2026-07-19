@@ -30,15 +30,27 @@ Score attack — no elimination:
 1. Every enabled minigame (11-game roster across 6 categories) is played
    exactly once, by **all players simultaneously**, in a seeded-shuffled
    order. Music + circling avatars play between games.
-2. Raw metrics are normalized per game to 0–1000 **across only the players
+2. Before each game (and the finale), everyone sees an **animated how-to
+   tutorial**: looping ✓ DO / ✗ AVOID demos of the game. Duration is a host
+   config knob (default 9s, 0 = off); the host's Next — or the solo
+   player's Skip — jumps straight in.
+3. Raw metrics are normalized per game to 0–1000 **across only the players
    who played it** (P90/P10 outlier clamps; no rank-summing). Non-submitters
    score 0 for that game but stay in.
-3. After every game, each player sees their raw result, points earned,
-   running total, and rank; the host screen shows the full leaderboard.
-4. The finale is **musical chairs**: a clock-synced reaction test everyone
+4. After every game, each player sees their raw result, points earned,
+   running total, and rank; a **live leaderboard strip** stays pinned to the
+   top of every player screen and the host screen for the whole session.
+5. The finale is **musical chairs**: a clock-synced reaction test everyone
    plays at once. Penalized reaction time is normalized 0–1000 like any
    other game.
-5. Highest cumulative total wins.
+6. Highest cumulative total wins.
+
+Round content is randomized **server-side** with a seeded RNG and broadcast
+to every player, so everyone always plays the identical configuration:
+Stop the Clock draws a random 6–10s target, Grid Flash varies pattern sizes
+(6–9 cells), Slingshot jitters the distance ±25%, Trace picks from 15
+shapes, and Read the Room draws from an **80-question humorous bank**
+(Typing Sprint from 30 sentences) with no repeats within a session.
 
 ## Anti-cheat details worth knowing
 

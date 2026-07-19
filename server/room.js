@@ -32,6 +32,7 @@ export function makeRoomCode(rng = Math.random) {
 
 const DEFAULTS = {
   gameDuration: 45000,
+  tutorialMs: 9000,        // animated how-to screen before each game; 0 = off
   practice: true,
   minDelay: 2000,
   maxDelay: 6000,
@@ -54,6 +55,7 @@ function sanitizeConfig(raw = {}) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
   c.gameDuration = numIn(raw.gameDuration, 500, 120000, DEFAULTS.gameDuration);
+  c.tutorialMs = numIn(raw.tutorialMs, 0, 30000, DEFAULTS.tutorialMs);
   c.practice = raw.practice != null ? !!raw.practice : DEFAULTS.practice;
   c.minDelay = numIn(raw.minDelay, 500, 10000, DEFAULTS.minDelay);
   c.maxDelay = numIn(raw.maxDelay, c.minDelay, 15000, Math.max(c.minDelay, DEFAULTS.maxDelay));
@@ -89,6 +91,8 @@ export class Room {
     this.lastScores = null;   // leaderboard rows from the last scored game
     this.redemption = null;
     this.afterMusic = null;   // what the music phase leads into
+    this.tutorial = null;     // current tutorial info (for reconnect snapshots)
+    this.afterTutorial = null;
     this.winnerId = null;
     this.finalStandings = null;
     this.timers = new Map();
@@ -271,13 +275,16 @@ export class Room {
     if (this.phase === 'scores' && this.lastScores) {
       snap.scores = this.lastScores;
     }
+    if (this.phase === 'tutorial' && this.tutorial) {
+      snap.tutorial = { ...this.tutorial };
+    }
     return snap;
   }
 
   publicConfig() {
-    const { gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
+    const { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
     const roster = ROSTER.map(({ key, name, category }) => ({ key, name, category }));
-    return { gameDuration, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled, roster };
+    return { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled, roster };
   }
 
   updateConfig(raw) {
@@ -315,12 +322,10 @@ export class Room {
       }],
       gameIndex: 0,
     };
-    const g = this.round.games[0];
-    const duration = Math.min(this.config.gameDuration, 30000);
-    g.deadline = Date.now() + duration;
-    this.setPhase('minigame', { ...this.gamePayload(g, duration), practice: true });
-    this.emitHost('host:progress', { submitted: 0, total: this.players.size });
-    this.setTimer('game', () => this.closeGame(g.token), duration + this.config.closeGraceMs);
+    this.startTutorial(
+      { key: 'stopclock', gameName: 'Stop the Clock', practice: true },
+      () => this.startGame(0)
+    );
   }
 
   // Solo test: run any single game from the lobby, unscored, any player count
@@ -346,11 +351,7 @@ export class Room {
       gameIndex: 0,
       extras: {},
     };
-    const g = this.round.games[0];
-    g.deadline = Date.now() + this.config.gameDuration;
-    this.setPhase('minigame', this.gamePayload(g));
-    this.emitHost('host:progress', { submitted: 0, total: this.players.size });
-    this.setTimer('game', () => this.closeGame(g.token), this.config.gameDuration + this.config.closeGraceMs);
+    this.startTutorial({ key, gameName: meta.name, test: true }, () => this.startGame(0));
     return { ok: true };
   }
 
@@ -367,8 +368,11 @@ export class Room {
   backToLobby() {
     this.clearTimer('game');
     this.clearTimer('redemption');
+    this.clearTimer('tutorial');
     this.round = null;
     this.redemption = null;
+    this.tutorial = null;
+    this.afterTutorial = null;
     this.setPhase('lobby', {});
     this.broadcastPlayers();
     return { ok: true };
@@ -417,18 +421,49 @@ export class Room {
     };
     this.playMusicThen(
       { gameNames: [meta.name], gameNumber: this.queueIndex + 1 },
-      () => this.startGame(0)
+      () => this.startTutorial(
+        { key, gameName: meta.name, gameNumber: this.queueIndex + 1 },
+        () => this.startGame(0)
+      )
     );
+  }
+
+  // Animated how-to screen (what to do / what to avoid) shown before every
+  // game. The host's Next — or the solo player's Skip — jumps straight in.
+  startTutorial(info, fn) {
+    const ms = this.config.tutorialMs;
+    if (!ms) return fn();
+    this.afterTutorial = fn;
+    this.tutorial = { ...info, duration: ms, deadline: Date.now() + ms };
+    this.setPhase('tutorial', { ...this.tutorial });
+    this.setTimer('tutorial', () => this.endTutorial(), ms);
+  }
+
+  endTutorial() {
+    this.clearTimer('tutorial');
+    const fn = this.afterTutorial;
+    this.afterTutorial = null;
+    this.tutorial = null;
+    fn?.();
+  }
+
+  skipTutorial() {
+    if (this.phase !== 'tutorial') return { error: 'No tutorial to skip.' };
+    this.endTutorial();
+    return { ok: true };
   }
 
   startGame(idx) {
     const g = this.round.games[idx];
     if (!g) return;
     this.round.gameIndex = idx;
-    g.deadline = Date.now() + this.config.gameDuration;
-    this.setPhase('minigame', this.gamePayload(g));
+    const duration = this.round.practice
+      ? Math.min(this.config.gameDuration, 30000)
+      : this.config.gameDuration;
+    g.deadline = Date.now() + duration;
+    this.setPhase('minigame', this.gamePayload(g, duration));
     this.emitHost('host:progress', { submitted: 0, total: this.players.size });
-    this.setTimer('game', () => this.closeGame(g.token), this.config.gameDuration + this.config.closeGraceMs);
+    this.setTimer('game', () => this.closeGame(g.token), duration + this.config.closeGraceMs);
   }
 
   handleSubmit(playerId, payload) {
@@ -539,7 +574,10 @@ export class Room {
     this.round = null;
     this.playMusicThen(
       { gameNames: ['Musical Chairs'], gameNumber: this.queue.length + 1, chairs: true },
-      () => this.startRedemption([...this.players.keys()], 'scored')
+      () => this.startTutorial(
+        { key: 'chairs', gameName: 'Musical Chairs', chairs: true },
+        () => this.startRedemption([...this.players.keys()], 'scored')
+      )
     );
   }
 
@@ -670,7 +708,9 @@ export class Room {
 
   // Rematch: same lobby, fresh session state.
   reset() {
-    this.clearTimer('game'); this.clearTimer('music'); this.clearTimer('redemption');
+    this.clearTimer('game'); this.clearTimer('music'); this.clearTimer('redemption'); this.clearTimer('tutorial');
+    this.tutorial = null;
+    this.afterTutorial = null;
     this.phase = 'lobby';
     this.queue = [];
     this.queueIndex = 0;
@@ -708,6 +748,9 @@ export class Room {
         fn?.();
         return { ok: true };
       }
+      case 'tutorial':
+        this.endTutorial();
+        return { ok: true };
       case 'scores':
         this.nextGame();
         return { ok: true };

@@ -17,6 +17,26 @@ const SENTENCES = [
   'The meeting could have been an email, and the email could have waited.',
   'Half of debugging is staring; the other half is apologizing to the code.',
   'If you can read this sentence quickly, your coffee is finally working.',
+  'Our team synergy peaked the day the vending machine started working.',
+  'I put my keys somewhere safe and now they are gone forever, obviously.',
+  'The office plant has seen things no fern should ever have to witness.',
+  'Reply all is a button that has ended more careers than we can count.',
+  'My password is strong, unique, and written on a sticky note right here.',
+  'The mute button works perfectly except when you actually need it most.',
+  'The fastest way to find a typo is to hit send and wait three seconds.',
+  'Our roadmap is less of a map and more of a vibe with quarterly labels.',
+  'Nothing motivates a team like a deadline that was due yesterday.',
+  'I have a filing system for my desktop: chaos, sorted alphabetically.',
+  'The intern fixed in an hour what we argued about for eleven meetings.',
+  'A watched progress bar never loads, but an ignored one fails silently.',
+  'My calendar has back to back meetings about reducing meeting overload.',
+  'The printer senses fear and jams accordingly during important demos.',
+  'We renamed the folder final, then final two, then final for real now.',
+  'Someone microwaved fish again and the whole floor is now in mourning.',
+  'My browser has ninety tabs open and each one is a broken promise.',
+  'The standup ran long because nobody could agree on what short means.',
+  'Autocorrect has never once corrected a word into something better.',
+  'The snack drawer is a shared resource governed by unspoken treaties.',
 ];
 
 const ROOM_QUESTIONS = [
@@ -32,6 +52,74 @@ const ROOM_QUESTIONS = [
   'Do you talk to yourself out loud while working?',
   'Do you snooze your alarm more than twice?',
   'Have you ever returned a gift for the money?',
+  'Have you ever blamed the wifi to escape a meeting that was going fine?',
+  'Do you put ketchup on eggs?',
+  'Have you ever eaten clearly-labeled food from the office fridge?',
+  'Do you clap when the plane lands?',
+  'Have you ever googled how to spell a word you use every day?',
+  'Do you double-dip chips at parties?',
+  'Have you ever waved back at someone who was not waving at you?',
+  'Do you actually read the terms and conditions?',
+  'Have you ever faked knowing a name for more than a month?',
+  'Do you sleep with socks on?',
+  'Have you ever cried at a commercial?',
+  'Do you check your phone within one minute of waking up?',
+  'Have you ever rehearsed an argument in the shower you never had?',
+  'Do you own more than five houseplants?',
+  'Have you ever liked your own post?',
+  'Do you eat cereal for dinner?',
+  'Have you ever practiced your coffee order before reaching the counter?',
+  'Have you ever pushed a door that clearly said pull?',
+  'Do you apologize to furniture when you bump into it?',
+  'Have you ever faked a phone call to escape a conversation?',
+  'Do you have a junk drawer you are slightly afraid to open?',
+  'Have you ever re-gifted a present?',
+  'Do you save the pizza crusts for last?',
+  'Have you ever texted someone sitting in the same room?',
+  'Do you have more than 1,000 unread emails?',
+  'Do you believe in ghosts?',
+  'Have you ever googled yourself?',
+  'Do you hoard sauce packets in a drawer?',
+  'Have you ever fake-laughed at the boss’s joke?',
+  'Do you know every word of at least one 2000s pop song?',
+  'Have you ever worn the same shirt on video calls two days in a row?',
+  'Do you narrate your pet’s inner thoughts out loud?',
+  'Have you ever missed a flight?',
+  'Do you screenshot things you will never look at again?',
+  'Have you ever joined a meeting from a bathroom?',
+  'Do you think pineapple belongs on pizza?',
+  'Have you ever said “you too” to a waiter who said “enjoy your meal”?',
+  'Do you still count on your fingers?',
+  'Have you ever pretended to take notes to look busy?',
+  'Do you dance when nobody is watching?',
+  'Have you ever locked yourself out of your own home?',
+  'Do you keep cables for devices you no longer own?',
+  'Have you ever cried during an animated movie as an adult?',
+  'Do you talk to your plants?',
+  'Have you ever eaten dessert before dinner as an adult?',
+  'Do you replay conversations from years ago and cringe?',
+  'Have you ever been on TV?',
+  'Do you sleep with more than two pillows?',
+  'Have you ever won a raffle?',
+  'Do you use dark mode on everything?',
+  'Have you ever briefly forgotten your own age?',
+  'Do you keep your phone permanently on silent?',
+  'Have you ever gone back home just to check the door was locked?',
+  'Do you confidently sing lyrics that turn out to be wrong?',
+  'Have you ever laughed so hard at work that you cried?',
+  'Do you have an emergency snack within arm’s reach right now?',
+  'Have you ever sent a voice message of pure silence by accident?',
+  'Do you keep a box of old birthday cards?',
+  'Have you ever said goodbye and then walked in the same direction?',
+  'Do you re-check the fridge hoping new food has appeared?',
+  'Have you ever fallen off a chair in public?',
+  'Do you set alarms for weird times like 7:03?',
+  'Have you ever called a teacher “mom” or a boss “dad”?',
+  'Do you keep the box your phone came in?',
+  'Have you ever watched an entire season in one day?',
+  'Do you take the stairs only when someone is watching?',
+  'Have you ever clapped alone at the end of a presentation?',
+  'Do you own a kitchen gadget you have used exactly once?',
 ];
 
 export const ROSTER = [
@@ -92,17 +180,30 @@ export function buildGameData(key, ctx) {
     }
     case 'trace':
       return {
-        clientData: { shape: pick(rng, ['spiral', 'star', 'wave']), seed: `trace-${Math.floor(rng() * 1e9)}` },
+        clientData: {
+          shape: pick(rng, [
+            'spiral', 'star', 'wave', 'zigzag', 'infinity',
+            'heart', 'circle', 'triangle', 'square', 'diamond',
+            'hourglass', 'hexagon', 'bolt', 'arrow', 'cross',
+          ]),
+          seed: `trace-${Math.floor(rng() * 1e9)}`,
+        },
         secret: {},
       };
     case 'dots': {
       const counts = [randInt(rng, 22, 40), randInt(rng, 90, 150), randInt(rng, 300, 500)];
       return { clientData: { counts, seed: `dots-${Math.floor(rng() * 1e9)}` }, secret: { counts } };
     }
-    case 'stopclock':
-      return { clientData: { targetMs: 10000, visibleMs: 3000, attempts: 2 }, secret: {} };
+    case 'stopclock': {
+      // Random target 6.0–10.0s (half-second steps) so nobody can pre-train
+      // a single interval.
+      const targetMs = randInt(rng, 12, 20) * 500;
+      return { clientData: { targetMs, visibleMs: 3000, attempts: 2 }, secret: {} };
+    }
     case 'gridflash': {
-      const patterns = [0, 1].map(() => shuffle(rng, [...Array(25).keys()]).slice(0, 8).sort((a, b) => a - b));
+      // 6–9 lit cells per round — pattern size varies between sessions.
+      const patterns = [0, 1].map(() =>
+        shuffle(rng, [...Array(25).keys()]).slice(0, randInt(rng, 6, 9)).sort((a, b) => a - b));
       return { clientData: { patterns, showMs: 4000 }, secret: { patterns } };
     }
     case 'readroom': {
@@ -115,11 +216,14 @@ export function buildGameData(key, ctx) {
     }
     case 'spacemash':
       return { clientData: { activeMs: 10000, capPerSec: 20 }, secret: {} };
-    case 'slingshot':
+    case 'slingshot': {
+      // Jitter the host's base distance ±25% so range-finding stays a skill.
+      const distance = clamp(Math.round(config.slingshotDistance * (0.75 + rng() * 0.5)), 30, 150);
       return {
-        clientData: { distance: config.slingshotDistance, shots: 5, rings: [2, 5, 10, 20] },
+        clientData: { distance, shots: 5, rings: [2, 5, 10, 20] },
         secret: {},
       };
+    }
     default:
       throw new Error(`unknown game key ${key}`);
   }

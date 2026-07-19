@@ -34,6 +34,8 @@
         <div class="config-grid">
           <label>Minigame duration: <span id="cfg-dur-val">45</span>s
             <input type="range" id="cfg-dur" min="20" max="90" value="45" /></label>
+          <label>Tutorial screens: <span id="cfg-tut-val">9</span>s (0 = off)
+            <input type="range" id="cfg-tut" min="0" max="20" value="9" /></label>
           <label>Early-press penalty: <span id="cfg-pen-val">10</span>%
             <input type="range" id="cfg-pen" min="0" max="50" value="10" /></label>
           <label>Slingshot distance: <span id="cfg-sling-val">60</span> ft
@@ -55,6 +57,7 @@
         <div class="ladder" id="run-ladder"></div>
         <button id="next-btn" class="secondary">Next ▸</button>
       </div>
+      <div id="host-liveboard" class="liveboard" style="max-width:1100px"></div>
       <div id="host-content" class="card wide"></div>
     </div>
   </div>

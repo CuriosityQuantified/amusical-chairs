@@ -88,6 +88,7 @@ export function attachSockets(io) {
     socket.on('solo:play', soloOnly((r, payload, cb) => cb?.(r.startTest(payload?.key))));
     socket.on('solo:redemption', soloOnly((r, _p, cb) => cb?.(r.startRedemptionTest())));
     socket.on('solo:menu', soloOnly((r, _p, cb) => cb?.(r.backToLobby())));
+    socket.on('solo:skip', soloOnly((r, _p, cb) => cb?.(r.skipTutorial())));
 
     socket.on('sync:report', (sync) => {
       const r = room();

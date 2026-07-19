@@ -5,6 +5,7 @@
 import { syncClock } from '/js/sync.js';
 import { GameClients } from '/js/games.js';
 import { startChairs } from '/js/chairs.js';
+import { startTutorialAnim } from '/js/tutorials.js';
 import { createRedemptionRun } from '/shared/redemption-core.js';
 
 const socket = io();
@@ -19,6 +20,7 @@ const state = {
   redemption: null,
   solo: false,
   roster: [],          // [{key, name, category}] — for the solo menu
+  players: [],         // latest room roster w/ totals — feeds the live leaderboard
 };
 
 // ---- join flow -------------------------------------------------------------
@@ -85,8 +87,11 @@ function applySnapshot(snap) {
   if (!snap) return;
   state.solo = !!snap.solo;
   if (snap.config?.roster) state.roster = snap.config.roster;
+  if (snap.players) { state.players = snap.players; renderLiveboard(); }
   if (snap.game) {
     startMinigame(snap.game);
+  } else if (snap.phase === 'tutorial' && snap.tutorial) {
+    renderTutorial(snap.tutorial);
   } else if (snap.phase === 'scores' && snap.scores) {
     renderScores({ leaderboard: snap.scores });
   } else if (snap.phase === 'winner' && snap.finalStandings) {
@@ -137,13 +142,36 @@ function soloBackButton() {
 const content = () => $('content');
 const gameRoot = () => $('game-root');
 
+let activeTut = null;
+
 function clearAll() {
+  activeTut?.stop();
+  activeTut = null;
   content().replaceChildren();
   content().classList.remove('hidden');
   gameRoot().replaceChildren();
   $('banner').replaceChildren();
   hideCountdown();
   stopGameTimer();
+}
+
+// ---- live leaderboard (always on screen once ≥2 players have joined) --------
+
+function renderLiveboard() {
+  const lb = $('liveboard');
+  if (!lb) return;
+  const players = state.players || [];
+  if (state.solo || players.length < 2) { lb.classList.add('hidden'); return; }
+  lb.classList.remove('hidden');
+  const sorted = [...players].sort((a, b) => b.total - a.total);
+  lb.replaceChildren(el('span', { class: 'lb-title' }, '🏆'));
+  sorted.forEach((p, i) => {
+    lb.append(el('span', { class: 'lb-chip' + (p.id === state.playerId ? ' me' : '') },
+      `${i + 1}. ${p.name} · ${p.total}`));
+  });
+  // Keep your own chip in view without yanking the strip around.
+  const mine = lb.querySelector('.lb-chip.me');
+  if (mine && mine.offsetLeft > lb.clientWidth) lb.scrollLeft = mine.offsetLeft - lb.clientWidth / 2;
 }
 
 function renderWaiting(msg, sub = '') {
@@ -191,6 +219,27 @@ let autoTimer = null;
 function stopGameTimer() {
   if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
   state.game = null;
+}
+
+// ---- animated how-to tutorial before each game ------------------------------
+
+function renderTutorial(p) {
+  clearAll();
+  banner(p.chairs ? '🪑 GET READY' : p.gameNumber ? `GAME ${p.gameNumber}` : 'GET READY');
+  content().append(
+    el('h2', { class: 'center' }, `How to play: ${p.gameName}`),
+    el('p', { class: 'muted center' }, 'Watch the demo — the game starts in a moment.')
+  );
+  activeTut = startTutorialAnim(content(), p.key);
+  if (state.solo) {
+    content().append(el('button', {
+      class: 'big',
+      style: 'margin-top:12px',
+      onclick: () => socket.emit('solo:skip', {}, () => {}),
+    }, 'Skip ▸'));
+  }
+  const localDeadline = p.deadline - state.offset;
+  showCountdown(performance.now() + (localDeadline - Date.now()), p.duration);
 }
 
 function startMinigame(payload) {
@@ -256,7 +305,10 @@ function renderScores(p) {
 
 // ---- socket events ---------------------------------------------------------
 
-socket.on('room:players', () => {});
+socket.on('room:players', ({ players }) => {
+  state.players = players || [];
+  renderLiveboard();
+});
 
 socket.on('phase', (p) => {
   switch (p.name) {
@@ -274,6 +326,9 @@ socket.on('phase', (p) => {
             ? 'The finale: fastest reaction wins the most points!'
             : 'When it stops: ' + (p.gameNames || []).join(' + '))
       );
+      break;
+    case 'tutorial':
+      renderTutorial(p);
       break;
     case 'minigame':
       startMinigame(p);
