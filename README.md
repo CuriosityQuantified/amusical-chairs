@@ -16,8 +16,9 @@ npm start          # http://localhost:3000
 
 - **Host:** open `/host.html`, create a room, project the screen.
 - **Players:** scan the QR / open `/?code=XXXX`, enter a name.
-- Host config (durations, per-game toggles, practice round) lives in the
-  lobby screen.
+- Host config (minigame duration, per-game toggles) lives in the lobby
+  screen. There is no hosted practice round — anyone who wants a warm-up
+  plays a **solo game** from the join screen instead.
 
 ```bash
 npm test           # unit tests + 20-bot end-to-end harness

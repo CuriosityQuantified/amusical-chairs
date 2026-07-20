@@ -35,7 +35,6 @@ export function makeRoomCode(rng = Math.random) {
 const DEFAULTS = {
   gameDuration: 45000,
   tutorialMs: 9000,        // animated how-to screen before each game; 0 = off
-  practice: true,
   minDelay: 2000,
   maxDelay: 6000,
   earlyPressPenalty: 0.1,
@@ -58,7 +57,6 @@ function sanitizeConfig(raw = {}) {
   };
   c.gameDuration = numIn(raw.gameDuration, 500, 120000, DEFAULTS.gameDuration);
   c.tutorialMs = numIn(raw.tutorialMs, 0, 30000, DEFAULTS.tutorialMs);
-  c.practice = raw.practice != null ? !!raw.practice : DEFAULTS.practice;
   c.minDelay = numIn(raw.minDelay, 500, 10000, DEFAULTS.minDelay);
   c.maxDelay = numIn(raw.maxDelay, c.minDelay, 15000, Math.max(c.minDelay, DEFAULTS.maxDelay));
   c.earlyPressPenalty = numIn(raw.earlyPressPenalty, 0, 0.5, DEFAULTS.earlyPressPenalty);
@@ -89,7 +87,7 @@ export class Room {
     this.queue = [];          // game keys, each played exactly once
     this.queueIndex = 0;
     this.totals = new Map();  // playerId -> cumulative points
-    this.round = null;        // current single-game round (also practice/test)
+    this.round = null;        // current single-game round (also lobby tests)
     this.lastScores = null;   // leaderboard rows from the last scored game
     this.redemption = null;
     this.chairs = null;       // musical-chairs elimination tournament state
@@ -269,7 +267,7 @@ export class Room {
       winnerId: this.winnerId,
       finalStandings: this.finalStandings,
     };
-    if ((this.phase === 'minigame' || this.phase === 'practice') && this.round) {
+    if (this.phase === 'minigame' && this.round) {
       const g = this.round.games[this.round.gameIndex];
       if (g && p && !g.submissions.has(p.id)) {
         snap.game = this.gamePayload(g);
@@ -285,9 +283,9 @@ export class Room {
   }
 
   publicConfig() {
-    const { gameDuration, practice, minDelay, maxDelay, enabled } = this.config;
+    const { gameDuration, minDelay, maxDelay, enabled } = this.config;
     const roster = ROSTER.map(({ key, name, category }) => ({ key, name, category }));
-    return { gameDuration, practice, minDelay, maxDelay, enabled, roster };
+    return { gameDuration, minDelay, maxDelay, enabled, roster };
   }
 
   updateConfig(raw) {
@@ -307,28 +305,8 @@ export class Room {
     this.queue = shuffle(seededRng(`${this.code}:queue`), enabledKeys);
     this.queueIndex = 0;
     this.totals = new Map([...this.players.keys()].map((id) => [id, 0]));
-    if (this.config.practice) this.startPractice();
-    else this.nextGame();
+    this.nextGame();
     return { ok: true };
-  }
-
-  // Practice: one un-scored Stop the Clock so broken devices surface before
-  // the real games, not during them.
-  startPractice() {
-    const rng = seededRng(`${this.code}:practice`);
-    const { clientData, secret } = buildGameData('stopclock', { rng, config: this.config, used: {} });
-    this.round = {
-      practice: true,
-      games: [{
-        key: 'stopclock', ...ROSTER_BY_KEY.get('stopclock'),
-        clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID(),
-      }],
-      gameIndex: 0,
-    };
-    this.startTutorial(
-      { key: 'stopclock', gameName: 'Stop the Clock', practice: true },
-      () => this.startGame(0)
-    );
   }
 
   // Solo test: run any single game from the lobby, unscored, any player count
@@ -346,7 +324,6 @@ export class Room {
       used: {},
     });
     this.round = {
-      practice: false,
       test: true,
       games: [{
         ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID(),
@@ -396,7 +373,6 @@ export class Room {
       clientData: g.clientData,
       duration: dur,
       deadline: g.deadline ?? Date.now() + dur,
-      practice: !!this.round.practice,
       test: !!this.round.test,
     };
   }
@@ -421,7 +397,6 @@ export class Room {
       used: this.usedContent || (this.usedContent = {}),
     });
     this.round = {
-      practice: false,
       games: [{ ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID() }],
       gameIndex: 0,
       extras: {},
@@ -463,9 +438,7 @@ export class Room {
     const g = this.round.games[idx];
     if (!g) return;
     this.round.gameIndex = idx;
-    const duration = this.round.practice
-      ? Math.min(this.config.gameDuration, 30000)
-      : this.config.gameDuration;
+    const duration = this.config.gameDuration;
     g.deadline = Date.now() + duration;
     this.setPhase('minigame', this.gamePayload(g, duration));
     this.emitHost('host:progress', { submitted: 0, total: this.players.size });
@@ -520,10 +493,6 @@ export class Room {
         total: this.players.size,
         extras: this.round.extras,
       });
-      return;
-    }
-    if (this.round.practice) {
-      this.setPhase('practice_done', { submitted: g.submissions.size, total: this.players.size });
       return;
     }
     this.scoreGame(g);
@@ -798,7 +767,6 @@ export class Room {
       case 'test_done':
       case 'redemption_test_done':
         return this.backToLobby();
-      case 'practice_done': this.nextGame(); return { ok: true };
       case 'minigame': {
         const g = this.round?.games[this.round.gameIndex];
         if (g) this.closeGame(g.token);

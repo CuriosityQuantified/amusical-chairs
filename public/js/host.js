@@ -95,7 +95,6 @@ function buildConfigPanel() {
   const c = state.config;
   $('cfg-dur').value = Math.round(c.gameDuration / 1000);
   $('cfg-dur-val').textContent = Math.round(c.gameDuration / 1000);
-  $('cfg-practice').checked = c.practice;
 
   const nameOf = (key) => (c.roster || []).find((g) => g.key === key)?.name || key;
   const toggles = $('game-toggles');
@@ -119,7 +118,6 @@ function buildConfigPanel() {
   }
 
   $('cfg-dur').oninput = (e) => { $('cfg-dur-val').textContent = e.target.value; pushConfig({ gameDuration: Number(e.target.value) * 1000 }); };
-  $('cfg-practice').onchange = (e) => pushConfig({ practice: e.target.checked });
 }
 
 function pushConfig(patch) {
@@ -202,12 +200,6 @@ socket.on('phase', (p) => {
     case 'music': renderMusic(p); break;
     case 'tutorial': renderTutorial(p); break;
     case 'minigame': renderMinigame(p); break;
-    case 'practice_done':
-      content().replaceChildren(
-        el('h1', {}, '🧪 Practice complete'),
-        el('p', { class: 'muted' }, `${p.submitted} of ${p.total} submitted something. If someone was lost, fix it now.`),
-        el('p', {}, 'Press Next ▸ to start the games for real.'));
-      break;
     case 'test_done': renderTestDone(p); break;
     case 'scores': renderScores(p); break;
     case 'redemption': renderRedemption(p); break;
@@ -292,7 +284,7 @@ function renderTutorial(p) {
 
 function renderMinigame(p) {
   content().replaceChildren(
-    el('h1', {}, (p.practice ? '🧪 PRACTICE: ' : p.test ? '🔧 TEST: ' : '') + p.gameName),
+    el('h1', {}, (p.test ? '🔧 TEST: ' : '') + p.gameName),
     el('p', { class: 'muted', style: 'font-size:20px' }, `${Math.round(p.duration / 1000)}s`),
     el('div', { class: 'progress-count', id: 'prog' }, '0'),
     el('p', { class: 'muted', style: 'font-size:22px' }, 'submitted'),

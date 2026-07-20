@@ -517,8 +517,7 @@ const TUTORIALS = {
   ],
 };
 
-// The practice round reuses the stopclock tutorial; typing sprint intro etc.
-// come from the game clients themselves.
+// Typing sprint intro etc. come from the game clients themselves.
 
 // ---- runner -----------------------------------------------------------------
 

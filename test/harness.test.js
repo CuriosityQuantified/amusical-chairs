@@ -32,7 +32,6 @@ async function withDeadline(promise, ms, msg) {
 // untouched — only phase timings shrink.
 const TEST_CONFIG = {
   gameDuration: 900,
-  practice: false,
   musicMs: 60,
   tutorialMs: 50,
   redemptionPrepMs: 80,
