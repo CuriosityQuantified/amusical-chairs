@@ -20,6 +20,13 @@ import {
   aggregateGame,
   formatRaw,
 } from './games.js';
+import {
+  SPONSORABLE,
+  SPONSOR_CAP,
+  assignSponsors,
+  pickTestBrand,
+  sponsorClientInfo,
+} from './sponsors.js';
 
 // Ambiguity-free room-code alphabet: no I or O (and digits are excluded).
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -40,6 +47,7 @@ const DEFAULTS = {
   postGreenTimeout: 10000,
   hardTimeout: 25000,
   slingshotDistance: 60,
+  sponsors: true,          // sponsored rounds (hard-capped at SPONSOR_CAP per session)
   // pacing knobs (the low clamps exist so the bot harness can run a full
   // game in seconds)
   musicMs: null,           // null = seeded 4–7s
@@ -63,6 +71,7 @@ function sanitizeConfig(raw = {}) {
   c.postGreenTimeout = numIn(raw.postGreenTimeout, 1000, 30000, DEFAULTS.postGreenTimeout);
   c.hardTimeout = numIn(raw.hardTimeout, 1000, 60000, DEFAULTS.hardTimeout);
   c.slingshotDistance = numIn(raw.slingshotDistance, 30, 150, DEFAULTS.slingshotDistance);
+  c.sponsors = raw.sponsors != null ? !!raw.sponsors : DEFAULTS.sponsors;
   c.musicMs = raw.musicMs != null ? numIn(raw.musicMs, 50, 15000, null) : null;
   c.redemptionPrepMs = numIn(raw.redemptionPrepMs, 50, 10000, DEFAULTS.redemptionPrepMs);
   c.redemptionLeadMs = numIn(raw.redemptionLeadMs, 100, 10000, DEFAULTS.redemptionLeadMs);
@@ -282,9 +291,9 @@ export class Room {
   }
 
   publicConfig() {
-    const { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
+    const { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, sponsors, enabled } = this.config;
     const roster = ROSTER.map(({ key, name, category }) => ({ key, name, category }));
-    return { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled, roster };
+    return { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, sponsors, sponsorCap: SPONSOR_CAP, enabled, roster };
   }
 
   updateConfig(raw) {
@@ -302,6 +311,11 @@ export class Room {
     const enabledKeys = ROSTER.filter((g) => this.config.enabled[g.key]).map((g) => g.key);
     if (!enabledKeys.length) return { error: 'Enable at least one game.' };
     this.queue = shuffle(seededRng(`${this.code}:queue`), enabledKeys);
+    // Guardrail: at most SPONSOR_CAP games this session carry a sponsor,
+    // chosen and branded with the same seeded determinism as everything else.
+    this.sponsorAssignments = this.config.sponsors
+      ? assignSponsors(seededRng(`${this.code}:sponsors`), this.queue)
+      : new Map();
     this.queueIndex = 0;
     this.totals = new Map([...this.players.keys()].map((id) => [id, 0]));
     if (this.config.practice) this.startPractice();
@@ -337,21 +351,26 @@ export class Room {
     if (!meta) return { error: `Unknown game "${key}".` };
     if (this.players.size < 1) return { error: 'Need at least 1 player joined to test.' };
     this.testCounter += 1;
+    const testRng = seededRng(`${this.code}:test:${key}:${this.testCounter}`);
+    // Lobby tests preview the sponsored variant too (toggle sponsors off to
+    // preview the plain one).
+    const sponsor = this.config.sponsors && SPONSORABLE.has(key) ? pickTestBrand(testRng) : null;
     const { clientData, secret } = buildGameData(key, {
-      rng: seededRng(`${this.code}:test:${key}:${this.testCounter}`),
+      rng: testRng,
       config: this.config,
       used: {},
+      sponsor,
     });
     this.round = {
       practice: false,
       test: true,
       games: [{
-        ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID(),
+        ...meta, clientData, secret, sponsor, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID(),
       }],
       gameIndex: 0,
       extras: {},
     };
-    this.startTutorial({ key, gameName: meta.name, test: true }, () => this.startGame(0));
+    this.startTutorial({ key, gameName: meta.name, test: true, sponsor: sponsorClientInfo(sponsor) }, () => this.startGame(0));
     return { ok: true };
   }
 
@@ -394,6 +413,8 @@ export class Room {
       deadline: g.deadline ?? Date.now() + dur,
       practice: !!this.round.practice,
       test: !!this.round.test,
+      // Guardrail: sponsored rounds are always labeled as such.
+      sponsor: sponsorClientInfo(g.sponsor),
     };
   }
 
@@ -411,21 +432,23 @@ export class Room {
     if (this.queueIndex >= this.queue.length) return this.startChairsFinale();
     const key = this.queue[this.queueIndex];
     const meta = ROSTER_BY_KEY.get(key);
+    const sponsor = this.sponsorAssignments?.get(key) || null;
     const { clientData, secret } = buildGameData(key, {
       rng: seededRng(`${this.code}:g${this.queueIndex}:${key}`),
       config: this.config,
       used: this.usedContent || (this.usedContent = {}),
+      sponsor,
     });
     this.round = {
       practice: false,
-      games: [{ ...meta, clientData, secret, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID() }],
+      games: [{ ...meta, clientData, secret, sponsor, submissions: new Map(), metrics: new Map(), token: crypto.randomUUID() }],
       gameIndex: 0,
       extras: {},
     };
     this.playMusicThen(
       { gameNames: [meta.name], gameNumber: this.queueIndex + 1 },
       () => this.startTutorial(
-        { key, gameName: meta.name, gameNumber: this.queueIndex + 1 },
+        { key, gameName: meta.name, gameNumber: this.queueIndex + 1, sponsor: sponsorClientInfo(sponsor) },
         () => this.startGame(0)
       )
     );
@@ -559,6 +582,7 @@ export class Room {
       leaderboard: rows,
       nextIsChairs: this.queueIndex >= this.queue.length,
       extras: this.round.extras,
+      sponsor: sponsorClientInfo(g.sponsor),
     });
     for (const r of rows) {
       this.emitPlayer(r.id, 'you:score', {
@@ -718,6 +742,7 @@ export class Room {
     this.queueIndex = 0;
     this.totals = new Map();
     this.usedContent = {};
+    this.sponsorAssignments = new Map();
     this.round = null;
     this.lastScores = null;
     this.redemption = null;

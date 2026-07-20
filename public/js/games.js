@@ -68,6 +68,7 @@ GameClients.rgb = {
   intro: 'Mix the sliders to match the target color, then lock it in.',
   start(root, ctx) {
     const t = ctx.data.target;
+    const sp = ctx.data.sponsor;
     const cur = { r: 128, g: 128, b: 128 };
     const target = h('div', { class: 'swatch', style: { background: `rgb(${t.r},${t.g},${t.b})` } });
     const preview = h('div', { class: 'swatch' });
@@ -84,7 +85,9 @@ GameClients.rgb = {
     };
     paint();
     root.append(
-      h('p', {}, 'Target:'), target,
+      // Sponsored: the target IS the brand color — how well do you really
+      // know it?
+      h('p', {}, sp ? `Target — ${sp.colorName}, ${sp.name}'s color:` : 'Target:'), target,
       h('p', {}, 'Yours:'), preview,
       sliderRow('r', '#ff5470'), sliderRow('g', '#3dff9e'), sliderRow('b', '#00e5ff'),
       h('div', { style: { marginTop: '12px' } },
@@ -239,6 +242,10 @@ GameClients.trace = {
     });
     canvas.addEventListener('pointerup', () => { drawing = false; });
     drawBase();
+    if (ctx.data.sponsor) {
+      root.append(h('p', { class: 'trial-note center' },
+        `That's the ${ctx.data.sponsor.name} logo — trace it clean.`));
+    }
 
     function result() {
       const pts = strokes.filter(Boolean);
@@ -402,6 +409,7 @@ GameClients.dots = {
   start(root, ctx) {
     const rng = seededRng(ctx.data.seed);
     const counts = ctx.data.counts;
+    const sp = ctx.data.sponsor;
     const guesses = [];
     const note = h('p', { class: 'trial-note center' });
     const { canvas, ctx: g, w, hgt } = makeCanvas(root, 300);
@@ -415,20 +423,33 @@ GameClients.dots = {
 
     function show() {
       if (guesses.length >= counts.length) return ctx.submit({ guesses });
-      note.textContent = `Jar ${guesses.length + 1} of ${counts.length} — memorize!`;
+      note.textContent = sp
+        ? `${sp.name} jar ${guesses.length + 1} of ${counts.length} — count the ${sp.icon}!`
+        : `Jar ${guesses.length + 1} of ${counts.length} — memorize!`;
       btn.disabled = true;
       input.value = '';
       const pts = layouts[guesses.length];
       g.clearRect(0, 0, w, hgt);
-      g.shadowColor = '#ffd23d';
-      g.shadowBlur = 8;
-      g.fillStyle = '#ffd23d';
-      for (const p of pts) {
-        g.beginPath();
-        g.arc(p.x, p.y, 4, 0, Math.PI * 2);
-        g.fill();
+      if (sp) {
+        // Sponsored: the jar is full of the brand's product. Same counts and
+        // positions as plain dots — only the sprite changes.
+        g.font = '12px system-ui';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        for (const p of pts) g.fillText(sp.icon, p.x, p.y);
+        g.textAlign = 'start';
+        g.textBaseline = 'alphabetic';
+      } else {
+        g.shadowColor = '#ffd23d';
+        g.shadowBlur = 8;
+        g.fillStyle = '#ffd23d';
+        for (const p of pts) {
+          g.beginPath();
+          g.arc(p.x, p.y, 4, 0, Math.PI * 2);
+          g.fill();
+        }
+        g.shadowBlur = 0;
       }
-      g.shadowBlur = 0;
       setTimeout(() => {
         g.clearRect(0, 0, w, hgt);
         g.fillStyle = '#7fb8cc';
@@ -498,6 +519,7 @@ GameClients.gridflash = {
   intro: 'Some cells light up for 4 seconds. Rebuild the pattern from memory. Two rounds.',
   start(root, ctx) {
     const { patterns, showMs } = ctx.data;
+    const sp = ctx.data.sponsor;
     const picks = [];
     let current = new Set();
     let showing = true;
@@ -529,16 +551,24 @@ GameClients.gridflash = {
       showing = true;
       btn.disabled = true;
       current = new Set();
-      note.textContent = `Round ${r + 1} of ${patterns.length} — memorize!`;
+      note.textContent = sp
+        ? `Round ${r + 1} of ${patterns.length} — memorize where the ${sp.name} ${sp.icon} are!`
+        : `Round ${r + 1} of ${patterns.length} — memorize!`;
       cells.forEach((c, i) => {
         c.classList.remove('picked');
-        c.classList.toggle('lit', patterns[r].includes(i));
+        const lit = patterns[r].includes(i);
+        c.classList.toggle('lit', lit);
+        // Sponsored: the flashed cells ARE the ad — memorizing the brand's
+        // placement is the round.
+        c.textContent = lit && sp ? sp.icon : '';
       });
       setTimeout(() => {
-        cells.forEach((c) => c.classList.remove('lit'));
+        cells.forEach((c) => { c.classList.remove('lit'); c.textContent = ''; });
         showing = false;
         btn.disabled = false;
-        note.textContent = `Round ${r + 1} of ${patterns.length} — click the cells that were lit`;
+        note.textContent = sp
+          ? `Round ${r + 1} of ${patterns.length} — tap the cells that had the ${sp.icon}`
+          : `Round ${r + 1} of ${patterns.length} — click the cells that were lit`;
       }, showMs);
     }
     function confirm() {
@@ -614,11 +644,18 @@ GameClients.spacemash = {
   intro: 'Mash SPACE or the button as fast as you can for 10 seconds. Holding a key does nothing.',
   start(root, ctx) {
     const { activeMs, capPerSec } = ctx.data;
+    const sp = ctx.data.sponsor;
     const counter = createPressCounter({ capPerSec });
     let phase = 'countdown';
     const countEl = h('div', { class: 'mash-count' }, '3');
     const btn = h('button', { class: 'bigbtn' }, 'GET READY');
     root.append(countEl, btn);
+    if (sp) {
+      // Sponsored skin only — the counter, cap, and anti-macro logic are
+      // identical to the plain round.
+      root.append(h('p', { class: 'trial-note center' },
+        `You're shaking a ${sp.product} ${sp.icon} — it had better explode.`));
+    }
 
     // Touch path uses pointerdown, never click — mobile click delay would
     // halve a phone player's score (spec §14).
@@ -651,8 +688,8 @@ GameClients.spacemash = {
         clearInterval(cd);
         phase = 'active';
         countEl.textContent = '0';
-        btn.textContent = 'MASH!';
-        btn.style.background = 'var(--accent)';
+        btn.textContent = sp ? `SHAKE! ${sp.icon}` : 'MASH!';
+        btn.style.background = sp ? sp.css : 'var(--accent)';
         btn.style.color = '#1a0512';
         btn.style.boxShadow = '0 0 24px rgba(255, 45, 149, 0.4)';
         setTimeout(() => {
@@ -680,6 +717,7 @@ GameClients.slingshot = {
   intro: 'Drag anywhere to pull the pouch back — like a real slingshot, pull right to fire left. Release to shoot. The ball bounces and rolls; closest resting spot to the bullseye counts. Best of 5.',
   start(root, ctx) {
     const { distance: D, shots: SHOTS, rings } = ctx.data;
+    const sp = ctx.data.sponsor;
 
     // World units are feet: +z downrange to the target, +x right, +y up.
     const GRAV = 32.2;
@@ -842,9 +880,11 @@ GameClients.slingshot = {
       );
       scene.add(pouch);
 
+      // Sponsored: you're launching the brand's product — a color swap only,
+      // physics and scoring untouched.
       const ball = new THREE.Mesh(
         new THREE.SphereGeometry(BALL_R, 20, 14),
-        new THREE.MeshLambertMaterial({ color: 0xeef0ff })
+        new THREE.MeshLambertMaterial({ color: sp ? sp.css : 0xeef0ff })
       );
       ball.visible = false;
       scene.add(ball);
@@ -917,6 +957,7 @@ GameClients.slingshot = {
           return;
         }
         note.textContent =
+          (sp ? `${sp.icon} launch the ${sp.product} · ` : '') +
           `Shot ${shot + 1} of ${SHOTS} · target ${D} ft` +
           (best != null ? ` · best ${best.toFixed(1)} ft` : '') +
           (extra ? ` · ${extra}` : '');

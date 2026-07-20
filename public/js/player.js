@@ -223,6 +223,12 @@ function stopGameTimer() {
 
 // ---- animated how-to tutorial before each game ------------------------------
 
+// Guardrail: sponsored rounds are always labeled — transparency reads
+// playful, stealth reads gross.
+function sponsorChip(sp) {
+  return el('div', { class: 'sponsor-chip' }, `✦ Sponsored round · ${sp.icon} ${sp.name} — “${sp.tagline}”`);
+}
+
 function renderTutorial(p) {
   clearAll();
   banner(p.chairs ? '🪑 GET READY' : p.gameNumber ? `GAME ${p.gameNumber}` : 'GET READY');
@@ -232,6 +238,7 @@ function renderTutorial(p) {
       ? 'Watch the demo, then press Play.'
       : 'Watch the demo — the host starts the game.')
   );
+  if (p.sponsor) content().append(sponsorChip(p.sponsor));
   activeTut = startTutorialAnim(content(), p.key);
   if (state.solo) {
     content().append(el('button', {
@@ -250,6 +257,7 @@ function startMinigame(payload) {
     el('h2', {}, (payload.practice ? '🧪 PRACTICE — ' : payload.test ? '🔧 TEST — ' : '') + payload.gameName),
     el('p', { class: 'muted' }, client.intro || '')
   );
+  if (payload.sponsor) content().append(sponsorChip(payload.sponsor));
   // Convert the server deadline to local time via the sync offset, then run
   // the countdown off performance.now().
   const localDeadline = payload.deadline - state.offset;

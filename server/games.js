@@ -5,6 +5,7 @@
 
 import { randInt, shuffle, pick } from '../shared/rng.js';
 import { rgbToLab, ciede2000 } from '../shared/ciede2000.js';
+import { sponsorClientInfo } from './sponsors.js';
 
 const SENTENCES = [
   'The quick brown fox jumps over the lazy dog while the band plays on.',
@@ -154,19 +155,28 @@ function pickContent(rng, listLen, usedSet) {
 
 // Build the per-round data for a game. `clientData` is broadcast to players;
 // `secret` stays server-side (answers).
-// ctx: { rng, config, used } — `used` maps content-list name -> Set of indices.
+// ctx: { rng, config, used, sponsor } — `used` maps content-list name -> Set
+// of indices; `sponsor` (optional brand) swaps in that brand's content while
+// keeping mechanics and difficulty identical (see server/sponsors.js).
 export function buildGameData(key, ctx) {
-  const { rng, config, used } = ctx;
+  const { rng, config, used, sponsor } = ctx;
   const usedSet = (name) => {
     if (!used[name]) used[name] = new Set();
     return used[name];
   };
+  // Every sponsored round carries the brand info in clientData so the game
+  // client can render it; the shell's "Sponsored round" chip comes from the
+  // phase payload (room.js).
+  const sponsored = (data) =>
+    sponsor ? { ...data, sponsor: sponsorClientInfo(sponsor) } : data;
   switch (key) {
     case 'rgb': {
       // Mid-saturation / mid-lightness targets — near-black and near-white
-      // compress the perceptual scale.
-      const target = { r: randInt(rng, 50, 205), g: randInt(rng, 50, 205), b: randInt(rng, 50, 205) };
-      return { clientData: { target }, secret: { target } };
+      // compress the perceptual scale. Brand colors obey the same bounds.
+      const target = sponsor
+        ? { ...sponsor.color }
+        : { r: randInt(rng, 50, 205), g: randInt(rng, 50, 205), b: randInt(rng, 50, 205) };
+      return { clientData: sponsored({ target }), secret: { target } };
     }
     case 'oddoneout':
       return { clientData: { seed: `odd-${Math.floor(rng() * 1e9)}` }, secret: {} };
@@ -180,19 +190,21 @@ export function buildGameData(key, ctx) {
     }
     case 'trace':
       return {
-        clientData: {
-          shape: pick(rng, [
+        clientData: sponsored({
+          // Sponsored: the brand's "logo" is one of the same roster shapes,
+          // so a sponsored trace is exactly as hard as a normal one.
+          shape: sponsor ? sponsor.traceShape : pick(rng, [
             'spiral', 'star', 'wave', 'zigzag', 'infinity',
             'heart', 'circle', 'triangle', 'square', 'diamond',
             'hourglass', 'hexagon', 'bolt', 'arrow', 'cross',
           ]),
           seed: `trace-${Math.floor(rng() * 1e9)}`,
-        },
+        }),
         secret: {},
       };
     case 'dots': {
       const counts = [randInt(rng, 22, 40), randInt(rng, 90, 150), randInt(rng, 300, 500)];
-      return { clientData: { counts, seed: `dots-${Math.floor(rng() * 1e9)}` }, secret: { counts } };
+      return { clientData: sponsored({ counts, seed: `dots-${Math.floor(rng() * 1e9)}` }), secret: { counts } };
     }
     case 'stopclock': {
       // Random target 6.0–10.0s (half-second steps) so nobody can pre-train
@@ -202,25 +214,31 @@ export function buildGameData(key, ctx) {
     }
     case 'gridflash': {
       // 6–9 lit cells per round — pattern size varies between sessions.
+      // Sponsored: same patterns, but lit cells render the brand icon —
+      // memorizing the ad IS the round.
       const patterns = [0, 1].map(() =>
         shuffle(rng, [...Array(25).keys()]).slice(0, randInt(rng, 6, 9)).sort((a, b) => a - b));
-      return { clientData: { patterns, showMs: 4000 }, secret: { patterns } };
+      return { clientData: sponsored({ patterns, showMs: 4000 }), secret: { patterns } };
     }
     case 'readroom': {
-      const idx = pickContent(rng, ROOM_QUESTIONS.length, usedSet('readroom'));
-      return { clientData: { question: ROOM_QUESTIONS[idx] }, secret: {} };
+      const question = sponsor
+        ? pick(rng, sponsor.questions)
+        : ROOM_QUESTIONS[pickContent(rng, ROOM_QUESTIONS.length, usedSet('readroom'))];
+      return { clientData: sponsored({ question }), secret: {} };
     }
     case 'typing': {
-      const idx = pickContent(rng, SENTENCES.length, usedSet('typing'));
-      return { clientData: { sentence: SENTENCES[idx] }, secret: { sentence: SENTENCES[idx] } };
+      const sentence = sponsor
+        ? pick(rng, sponsor.sentences)
+        : SENTENCES[pickContent(rng, SENTENCES.length, usedSet('typing'))];
+      return { clientData: sponsored({ sentence }), secret: { sentence } };
     }
     case 'spacemash':
-      return { clientData: { activeMs: 10000, capPerSec: 20 }, secret: {} };
+      return { clientData: sponsored({ activeMs: 10000, capPerSec: 20 }), secret: {} };
     case 'slingshot': {
       // Jitter the host's base distance ±25% so range-finding stays a skill.
       const distance = clamp(Math.round(config.slingshotDistance * (0.75 + rng() * 0.5)), 30, 150);
       return {
-        clientData: { distance, shots: 5, rings: [2, 5, 10, 20] },
+        clientData: sponsored({ distance, shots: 5, rings: [2, 5, 10, 20] }),
         secret: {},
       };
     }

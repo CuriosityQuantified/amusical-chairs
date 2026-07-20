@@ -52,6 +52,21 @@ Stop the Clock draws a random 6–10s target, Grid Flash varies pattern sizes
 shapes, and Read the Room draws from an **80-question humorous bank**
 (Typing Sprint from 30 sentences) with no repeats within a session.
 
+## Sponsored rounds
+
+Ads as game content, never as interruption (see `docs/ads-brainstorm.md`):
+at most **3 games per session** are sponsored (seeded per room, host toggle
+in the lobby), and every sponsored round is labeled with a
+"✦ Sponsored round" chip on both player and host screens. A sponsored round
+swaps content, never mechanics: Grid Flash's cells flash the brand icon,
+RGB Color Match targets the brand's color, Trace draws the brand "logo"
+shape, Dots fills the jar with the product, Typing Sprint and Read the Room
+draw from brand-written sentences/questions, and Space Mash / Slingshot get
+a product skin. Difficulty is content-neutral and the usual per-game 0–1000
+normalization applies. Odd One Out, Bisect, and Stop the Clock are never
+sponsored. Ships with a fictional demo brand pack (`server/sponsors.js`) —
+real trademarks require a real sponsor deal.
+
 ## Anti-cheat details worth knowing
 
 - **Redemption mashing:** any press before green silently redraws the delay

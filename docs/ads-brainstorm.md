@@ -52,11 +52,24 @@ image assets, uploaded in the lobby config) and it's simultaneously:
 2. a customization *feature* for private ones — people pay for that instead of
    tolerating it.
 
+## Implementation status
+
+Tier 1 is **implemented** (`server/sponsors.js`) for every game except Odd One
+Out — Grid Flash, RGB Color Match, Trace the Shape, Dots in the Jar, Typing
+Sprint, Read the Room, Space Mash, and Slingshot all have sponsored variants,
+driven by a fictional demo brand pack. Bisect the Line and Stop the Clock have
+no natural content slot and stay ad-free. The two hard guardrails below (the
+per-session cap and the sponsored-round label) are enforced in code, not just
+policy; the host toggle lives in the lobby config panel.
+
 ## Anti-annoyance guardrails
 
-- **Frequency cap**: at most ~3 of the 11 games sponsored per session; host
-  toggle per placement. Scarcity keeps it charming.
-- **Label it**: a small "Sponsored round" chip. Transparency reads as playful;
+- **Frequency cap** *(implemented — `SPONSOR_CAP = 3`)*: at most 3 of the 11
+  games are sponsored per session, chosen seeded per room, one distinct brand
+  each. Scarcity keeps it charming.
+- **Label it** *(implemented)*: every sponsored round wears a
+  "✦ Sponsored round · brand" chip on the player screen, the host/projector
+  screen, the tutorial, and the score reveal. Transparency reads as playful;
   stealth reads as gross.
 - **Player screens stay clean during timed input.** Passive branding lives on
   the host screen; on player devices the ad only appears where it is the

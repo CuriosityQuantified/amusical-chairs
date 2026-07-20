@@ -101,6 +101,7 @@ function buildConfigPanel() {
   $('cfg-sling').value = c.slingshotDistance;
   $('cfg-sling-val').textContent = c.slingshotDistance;
   $('cfg-practice').checked = c.practice;
+  $('cfg-sponsors').checked = c.sponsors !== false;
 
   const nameOf = (key) => (c.roster || []).find((g) => g.key === key)?.name || key;
   const toggles = $('game-toggles');
@@ -128,6 +129,7 @@ function buildConfigPanel() {
   $('cfg-pen').oninput = (e) => { $('cfg-pen-val').textContent = e.target.value; pushConfig({ earlyPressPenalty: Number(e.target.value) / 100 }); };
   $('cfg-sling').oninput = (e) => { $('cfg-sling-val').textContent = e.target.value; pushConfig({ slingshotDistance: Number(e.target.value) }); };
   $('cfg-practice').onchange = (e) => pushConfig({ practice: e.target.checked });
+  $('cfg-sponsors').onchange = (e) => pushConfig({ sponsors: e.target.checked });
 }
 
 function pushConfig(patch) {
@@ -284,6 +286,11 @@ function renderMusic(p) {
 
 // ---- pre-game tutorial ------------------------------------------------------
 
+// Guardrail: sponsored rounds are always labeled, on the projector too.
+function sponsorChip(sp) {
+  return el('div', { class: 'sponsor-chip' }, `✦ Sponsored round · ${sp.icon} ${sp.name} — “${sp.tagline}”`);
+}
+
 function renderTutorial(p) {
   const demo = el('div', { style: 'max-width:460px; margin:0 auto' });
   content().replaceChildren(
@@ -292,6 +299,7 @@ function renderTutorial(p) {
     demo,
     el('p', { class: 'muted' }, 'Press Next ▸ to start the game.')
   );
+  if (p.sponsor) content().prepend(sponsorChip(p.sponsor));
   hostTut = startTutorialAnim(demo, p.key);
 }
 
@@ -300,6 +308,7 @@ function renderTutorial(p) {
 function renderMinigame(p) {
   content().replaceChildren(
     el('h1', {}, (p.practice ? '🧪 PRACTICE: ' : p.test ? '🔧 TEST: ' : '') + p.gameName),
+    p.sponsor ? sponsorChip(p.sponsor) : el('span', {}),
     el('p', { class: 'muted', style: 'font-size:20px' }, `${Math.round(p.duration / 1000)}s`),
     el('div', { class: 'progress-count', id: 'prog' }, '0'),
     el('p', { class: 'muted', style: 'font-size:22px' }, 'submitted'),
@@ -357,6 +366,7 @@ function scoreTable(rows, { animate = false } = {}) {
 function renderScores(p) {
   content().replaceChildren(
     el('h1', {}, `${p.gameName} — scores`),
+    p.sponsor ? sponsorChip(p.sponsor) : el('span', {}),
     scoreTable(p.leaderboard, { animate: true }),
     extrasBlock(p.extras),
     el('p', { class: 'muted' },
