@@ -23,6 +23,29 @@ npm start          # http://localhost:3000
 npm test           # unit tests + 20-bot end-to-end harness
 ```
 
+## Deploying
+
+The server is a single plain Node process (`npm start`, honors `PORT`,
+Node ≥ 20). It needs **WebSockets** (socket.io) and **exactly one
+instance** — rooms live in process memory, so never scale out and never
+use a serverless/function platform. No database.
+
+- **Render** — closest to Railway's push-to-deploy: dashboard → New + →
+  Blueprint → pick this repo (`render.yaml` is included). Free plan spins
+  down after ~15 min idle; the `starter` plan stays always-on.
+- **Fly.io** — `fly launch --no-deploy` (uses the included `Dockerfile`),
+  then `fly deploy` and `fly scale count 1`.
+- **Google Cloud Run** — `gcloud run deploy amuseical-chairs --source .
+  --max-instances 1 --session-affinity --allow-unauthenticated`.
+- **DigitalOcean App Platform / anything else** — point it at the
+  `Dockerfile`, one instance, route HTTP + WebSocket traffic to `PORT`.
+
+If a corporate network blocks the platform's shared subdomain (as often
+happens with `*.up.railway.app`, and can equally hit `*.onrender.com` or
+`*.fly.dev`), attach a **custom domain** — every host above supports one
+for free, and a domain you own won't inherit the platform's block
+category.
+
 ## How a game works
 
 Score attack — no elimination:

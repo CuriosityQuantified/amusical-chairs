@@ -1,0 +1,16 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# In the Render dashboard: New + -> Blueprint -> pick this repo. Push-to-main
+# auto-deploys after that.
+#
+# The free plan spins down after ~15 min idle (first visitor waits ~30s while
+# it wakes); upgrade plan to "starter" to keep it always-on. Keep it at ONE
+# instance either way — rooms live in process memory.
+services:
+  - type: web
+    name: amuseical-chairs
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
