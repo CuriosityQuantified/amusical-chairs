@@ -257,7 +257,11 @@ GameClients.trace = {
       return { deviation, coverage: covered / path.length };
     }
     root.append(h('button', {
-      class: 'big', style: { marginTop: '10px' },
+      // Sticky: on short viewports (landscape phones) the canvas's 160px
+      // height floor can overflow the fold, and the canvas swallows touch
+      // scrolling — without this the button is unreachable and the round
+      // can only time out.
+      class: 'big', style: { marginTop: '10px', position: 'sticky', bottom: '10px' },
       onclick: () => { const r = result(); if (r) ctx.submit(r); },
     }, 'Done tracing'));
     return { collect: result };
