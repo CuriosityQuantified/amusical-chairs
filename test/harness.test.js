@@ -2,7 +2,8 @@
 // concurrency bug: bots join, play every minigame with plausible random
 // submissions, include silent non-submitters, a mid-round disconnect +
 // reconnect, and a masher in the musical-chairs finale — and the game must
-// play every enabled game exactly once and reach a winner by highest total.
+// play every enabled game exactly once, run the full 19-round chairs
+// elimination tournament, and reach a winner by highest total.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -154,7 +155,8 @@ test('20 bots: every game once, per-game scores, chairs finale, winner by total'
           setTimeout(() => host.emit('host:next', {}, () => {}), 30);
         }
         // Tutorials no longer auto-advance — the host starts each game.
-        if (p.name === 'tutorial') {
+        // Chairs round results also wait for the host's Next.
+        if (p.name === 'tutorial' || p.name === 'chairs_result') {
           setTimeout(() => host.emit('host:next', {}, () => {}), 30);
         }
         if (p.name === 'redemption') chairsSeen++;
@@ -181,7 +183,8 @@ test('20 bots: every game once, per-game scores, chairs finale, winner by total'
     const enabledCount = ROSTER.length;
     assert.equal(minigameKeys.length, enabledCount, 'every enabled game played');
     assert.equal(new Set(minigameKeys).size, enabledCount, 'no game repeats');
-    assert.equal(chairsSeen, 1, 'exactly one musical-chairs finale');
+    assert.equal(chairsSeen, bots.length - 1,
+      'chairs tournament runs players − 1 elimination rounds');
 
     // Per-game scoreboards: full roster of 20 on every one, totals monotone.
     assert.equal(scoreboards.length, enabledCount, 'a scoreboard after every game');
@@ -215,7 +218,8 @@ test('20 bots: every game once, per-game scores, chairs finale, winner by total'
 
     const masher = bots[19];
     const masherRow = standings.find((s) => s.id === masher.playerId);
-    assert.equal(masherRow.total, 0, 'masher never scored: no submissions, no clean press');
+    assert.equal(masherRow.total, 0,
+      'masher never scored: no submissions, first out of chairs → 0 bonus');
     assert.notEqual(winnerPayload.winnerId, masher.playerId, 'masher must not win');
 
     const standingNames = standings.map((s) => s.name);
@@ -247,7 +251,7 @@ test('2-player game runs to a winner', async () => {
     });
     const winner = new Promise((resolve) => {
       host.on('phase', (p) => {
-        if (p.name === 'scores' || p.name === 'tutorial') {
+        if (p.name === 'scores' || p.name === 'tutorial' || p.name === 'chairs_result') {
           setTimeout(() => host.emit('host:next', {}, () => {}), 30);
         }
         if (p.name === 'winner') resolve(p);

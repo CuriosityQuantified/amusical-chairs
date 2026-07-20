@@ -494,7 +494,7 @@ const TUTORIALS = {
   ],
 
   chairs: [
-    { ok: true, dur: 4200, label: 'Wait for GREEN, then tap instantly — fastest reaction wins',
+    { ok: true, dur: 4200, label: 'BONUS 3× — tap on GREEN fast: slowest each round loses their chair',
       draw(g, w, h, p) {
         const green = p > 0.55;
         g.fillStyle = green ? C.good : '#58121f';
@@ -504,7 +504,7 @@ const TUTORIALS = {
         cursor(g, w / 2 + 80, h / 2 + 40, green && p > 0.6 && p < 0.75);
         if (p > 0.65) text(g, '212 ms', w / 2, h - 18, { size: 18, color: C.good, bold: true });
       } },
-    { ok: false, dur: 3800, label: 'Never press on red — every early press adds a penalty',
+    { ok: false, dur: 3800, label: 'Never press on red — a penalty makes you the slowest, and OUT',
       draw(g, w, h, p) {
         g.fillStyle = '#58121f';
         g.beginPath(); g.arc(w / 2, h / 2 - 8, 62, 0, Math.PI * 2); g.fill();

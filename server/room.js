@@ -1,11 +1,13 @@
 // Room = one game session. All state is in-memory and ephemeral by design —
 // no database, no persistence.
 //
-// Format: every player plays every enabled minigame once, then the
-// musical-chairs reaction round as the scored finale. No elimination — each
-// game is normalized 0–1000 across the players who played it and added to a
-// running total; highest total wins. Everyone sees their score after every
-// game.
+// Format: every player plays every enabled minigame once (each normalized
+// 0–1000 across the players who played it and added to a running total),
+// then the musical-chairs finale: a BONUS elimination tournament of
+// (players − 1) reaction rounds. Each round the slowest player loses their
+// chair; the tournament runs until one player remains, and everyone banks
+// 3× points by final placement (1st = 3000 … last = 0). Highest cumulative
+// total wins the session.
 
 import crypto from 'node:crypto';
 import { seededRng, shuffle } from '../shared/rng.js';
@@ -90,6 +92,7 @@ export class Room {
     this.round = null;        // current single-game round (also practice/test)
     this.lastScores = null;   // leaderboard rows from the last scored game
     this.redemption = null;
+    this.chairs = null;       // musical-chairs elimination tournament state
     this.afterMusic = null;   // what the music phase leads into
     this.tutorial = null;     // current tutorial info (for reconnect snapshots)
     this.afterTutorial = null;
@@ -374,6 +377,7 @@ export class Room {
     this.clearTimer('tutorial');
     this.round = null;
     this.redemption = null;
+    this.chairs = null;
     this.tutorial = null;
     this.afterTutorial = null;
     this.setPhase('lobby', {});
@@ -570,17 +574,35 @@ export class Room {
     // Host advances from scores (host:next) → next game / chairs finale.
   }
 
-  // ---- musical chairs finale ----------------------------------------------
+  // ---- musical chairs finale (bonus elimination tournament) ----------------
+  //
+  // (players − 1) reaction rounds. Every round: chairs = players in the round
+  // minus one, the slowest reaction is eliminated, everyone else keeps a
+  // chair. The last player standing wins the tournament, and everyone banks
+  // 3× bonus points by final placement (1st = 3000 … last = 0).
 
   startChairsFinale() {
     this.round = null;
+    const ids = [...this.players.keys()];
+    this.chairs = {
+      active: ids,              // still holding a chair
+      eliminated: [],           // elimination order: first out first
+      totalRounds: Math.max(1, ids.length - 1),
+      round: 0,
+    };
     this.playMusicThen(
       { gameNames: ['Musical Chairs'], gameNumber: this.queue.length + 1, chairs: true },
       () => this.startTutorial(
         { key: 'chairs', gameName: 'Musical Chairs', chairs: true },
-        () => this.startRedemption([...this.players.keys()], 'scored')
+        () => this.startChairsRound()
       )
     );
+  }
+
+  startChairsRound() {
+    if (!this.chairs) return;
+    this.chairs.round += 1;
+    this.startRedemption(this.chairs.active, 'chairs');
   }
 
   startRedemption(participantIds, mode) {
@@ -593,12 +615,20 @@ export class Room {
       startedAt: Date.now(),
     };
     const names = participantIds.map((id) => this.players.get(id)?.name || '?');
+    const chairsInfo = mode === 'chairs' && this.chairs ? {
+      round: this.chairs.round,
+      totalRounds: this.chairs.totalRounds,
+      chairCount: Math.max(1, participantIds.length - 1),
+      bonus: true,
+      outNames: this.chairs.eliminated.map((id) => this.players.get(id)?.name || '?'),
+    } : {};
     this.setPhase('redemption', {
       participants: participantIds,
       participantNames: names,
       mode,
-      scored: mode === 'scored',
+      scored: mode === 'chairs',
       prepMs: c.redemptionPrepMs,
+      ...chairsInfo,
     });
     // Give clients a resync window, then broadcast the absolute server-time
     // T_green a couple of seconds ahead.
@@ -660,33 +690,63 @@ export class Room {
       return;
     }
 
-    // Scored finale: penalized reaction time is an error metric — normalize
-    // 0–1000 across everyone who got a clean press; the rest score 0.
-    const ok = results.filter((r) => r.status === 'ok');
-    const normalized = ok.length ? normalizeError(ok.map((r) => r.finalMs)) : [];
-    const points = new Map();
-    ok.forEach((r, i) => points.set(r.id, normalized[i]));
-    for (const r of results) {
-      if (!points.has(r.id)) points.set(r.id, 0);
-      this.totals.set(r.id, (this.totals.get(r.id) || 0) + points.get(r.id));
-    }
-    const chairsBoard = results.map((r) => ({
+    // Tournament round: the slowest player loses their chair; everyone else
+    // is seated and survives to the next round.
+    if (red.mode !== 'chairs' || !this.chairs) return;
+    const roundResults = results.map((r) => ({
       id: r.id, name: r.name, status: r.status,
       rawMs: r.rawMs != null ? Math.round(r.rawMs) : null,
       finalMs: Math.round(r.finalMs),
       earlyPresses: r.earlyPresses, flagged: r.flagged,
-      points: Math.round(points.get(r.id)),
-      total: Math.round(this.totals.get(r.id) || 0),
     }));
-    const byTotal = [...chairsBoard].sort((a, b) => b.total - a.total);
+    const out = results[results.length - 1];
+    this.chairs.active = this.chairs.active.filter((id) => id !== out.id);
+    this.chairs.eliminated.push(out.id);
+    this.setPhase('chairs_result', {
+      round: this.chairs.round,
+      totalRounds: this.chairs.totalRounds,
+      final: this.chairs.active.length <= 1,
+      results: roundResults,                                    // fastest → slowest
+      survivors: roundResults.slice(0, -1).map(({ id, name }) => ({ id, name })),
+      eliminated: { id: out.id, name: out.name, place: this.chairs.active.length + 1 },
+    });
+    // Host advances (host:next) → next round, or bonus scoring + winner.
+  }
+
+  // Bonus scoring: 3× points by final tournament placement. Linear like a
+  // normal game's 0–1000 spread, tripled: 1st = 3000, last = 0.
+  scoreChairsTournament() {
+    const ch = this.chairs;
+    if (!ch) return this.declareWinner();
+    this.chairs = null;
+    const ordinal = (n) => {
+      const s = ['th', 'st', 'nd', 'rd'];
+      const v = n % 100;
+      return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+    };
+    // Placement order: last survivor first, then eliminated in reverse order.
+    const order = [...ch.active, ...[...ch.eliminated].reverse()];
+    const n = order.length;
+    const chairsBoard = order.map((id, i) => {
+      const place = i + 1;
+      const points = n > 1 ? Math.round((3000 * (n - place)) / (n - 1)) : 3000;
+      this.totals.set(id, (this.totals.get(id) || 0) + points);
+      return {
+        place, id,
+        name: this.players.get(id)?.name || '?',
+        points,
+        total: Math.round(this.totals.get(id) || 0),
+      };
+    });
     for (const r of chairsBoard) {
       this.emitPlayer(r.id, 'you:score', {
         gameName: 'Musical Chairs',
-        raw: r.status === 'ok' ? `${r.rawMs} ms` : r.status,
+        raw: `${ordinal(r.place)} place`,
         points: r.points, total: r.total,
-        rank: byTotal.findIndex((x) => x.id === r.id) + 1, of: chairsBoard.length,
+        rank: r.place, of: n,
       });
     }
+    this.broadcastPlayers();
     this.declareWinner(chairsBoard);
   }
 
@@ -721,6 +781,7 @@ export class Room {
     this.round = null;
     this.lastScores = null;
     this.redemption = null;
+    this.chairs = null;
     this.afterMusic = null;
     this.winnerId = null;
     this.finalStandings = null;
@@ -758,6 +819,10 @@ export class Room {
         return { ok: true };
       case 'redemption':
         this.finishRedemption();
+        return { ok: true };
+      case 'chairs_result':
+        if (this.chairs && this.chairs.active.length > 1) this.startChairsRound();
+        else this.scoreChairsTournament();
         return { ok: true };
       case 'winner':
         this.reset();

@@ -1,10 +1,10 @@
 // Player app shell: join/reconnect, clock sync, minigame lifecycle, the
-// musical-chairs finale, and per-game score reveals. No elimination — every
-// player plays every game and the highest total wins.
+// musical-chairs finale (bonus elimination tournament: slowest out each
+// round, 3× points by placement), and per-game score reveals.
 
 import { syncClock } from '/js/sync.js';
 import { GameClients } from '/js/games.js';
-import { startChairs } from '/js/chairs.js';
+import { startChairs, startChairsSeated } from '/js/chairs.js';
 import { startTutorialAnim } from '/js/tutorials.js';
 import { createRedemptionRun } from '/shared/redemption-core.js';
 
@@ -323,7 +323,7 @@ socket.on('phase', (p) => {
         el('h2', { class: 'center' }, '🎵 Music is playing…'),
         el('p', { class: 'muted center' },
           p.chairs
-            ? 'The finale: fastest reaction wins the most points!'
+            ? 'BONUS ROUND — 3× points! Slowest reaction each round is OUT. Survive to the last chair!'
             : 'When it stops: ' + (p.gameNames || []).join(' + '))
       );
       break;
@@ -365,9 +365,14 @@ socket.on('phase', (p) => {
       renderScores(p);
       break;
     case 'redemption':
-      // Everyone plays the musical-chairs finale.
+      // Survivors play; eliminated players spectate.
       if (p.participants.includes(state.playerId)) prepareRedemption(p);
+      else if (p.round) renderWaiting(`🪑 Round ${p.round} of ${p.totalRounds} in progress…`,
+        'You’re out of chairs — watch the host screen.');
       else renderWaiting('Musical chairs in progress…', 'Watch the host screen.');
+      break;
+    case 'chairs_result':
+      renderChairsResult(p);
       break;
     case 'winner':
       renderWinner(p);
@@ -392,18 +397,50 @@ socket.on('you:score', (s) => {
 
 // ---- musical chairs (reaction) ---------------------------------------------
 
+// Round result: survivors see themselves take a chair; the slowest player
+// walks off. The final placements pay 3× bonus points.
+function renderChairsResult(p) {
+  clearAll();
+  const out = p.eliminated?.id === state.playerId;
+  const ord = (n) => `${n}${['th', 'st', 'nd', 'rd'][((n % 100) - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th'}`;
+  banner(out ? `💥 OUT — ${ord(p.eliminated.place)} PLACE` : '🪑 SAFE!', out ? '' : 'safe');
+  content().append(
+    el('h2', { class: 'center' }, out
+      ? `Slowest this round — you finish ${ord(p.eliminated.place)} in Musical Chairs.`
+      : p.final
+        ? '👑 You took the last chair!'
+        : `You grabbed a chair — round ${p.round} of ${p.totalRounds} survived.`)
+  );
+  const arena = el('div', { style: 'display:flex;justify-content:center' });
+  content().append(arena);
+  startChairsSeated(arena, {
+    seated: (p.survivors || []).map((s) => s.name),
+    out: p.eliminated?.name || null,
+    size: Math.min(280, Math.floor(window.innerHeight * 0.38)),
+  });
+  content().append(el('p', { class: 'muted center' }, p.final
+    ? 'Bonus points: 3× by placement — results coming up…'
+    : out
+      ? 'Your placement still banks 3× bonus points at the end.'
+      : 'Next round starts soon — one fewer chair!'));
+}
+
 function prepareRedemption(p) {
   clearAll();
   content().classList.add('hidden');
   const tz = $('tapzone');
   tz.classList.remove('hidden', 'green');
-  $('tapzone-text').textContent = 'WAIT FOR GREEN';
-  $('tapzone-sub').textContent = 'Tap or press any key the instant it turns green. Too early = trouble.';
+  $('tapzone-text').textContent = p.round
+    ? `ROUND ${p.round} of ${p.totalRounds} — WAIT FOR GREEN`
+    : 'WAIT FOR GREEN';
+  $('tapzone-sub').textContent = p.round
+    ? 'Slowest player loses their chair! Tap the instant it turns green. Too early = trouble.'
+    : 'Tap or press any key the instant it turns green. Too early = trouble.';
   // Everyone circles the chairs while waiting for the light.
   const names = p.participantNames || [];
   const anim = startChairs(tz, {
     names,
-    chairs: Math.max(1, names.length - 1),
+    chairs: p.chairCount ?? Math.max(1, names.length - 1),
     size: Math.min(300, Math.floor(window.innerHeight * 0.4)),
   });
   tz.insertBefore(anim.canvas, $('tapzone-text'));
@@ -497,7 +534,7 @@ function renderWinner(p) {
   content().append(el('h2', {}, `Winner: ${p.winnerName || '—'}`));
   if (myChairs) {
     content().append(el('p', { class: 'muted' },
-      `Musical Chairs: ${myChairs.status === 'ok' ? `${myChairs.rawMs} ms` : myChairs.status} → +${myChairs.points} pts`));
+      `Musical Chairs: #${myChairs.place} of ${p.chairsBoard.length} → +${myChairs.points} bonus pts (3×)`));
   }
   content().append(list);
 }

@@ -1,7 +1,8 @@
 // Room-level integration for the score-attack format: every enabled game is
 // played exactly once by everyone, scores are normalized 0–1000 per game and
-// accumulate, the musical-chairs reaction round is the scored finale, and the
-// highest total wins. Nobody is ever eliminated.
+// accumulate. The finale is the musical-chairs BONUS tournament: (players−1)
+// reaction rounds, slowest out each round, 3× points by final placement
+// (1st = 3000 … last = 0). Highest cumulative total wins the session.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -92,34 +93,52 @@ test('score attack: every game once, totals accumulate, chairs finale, highest t
         `${id} total accumulates across games`);
     }
 
-    // ---- musical chairs finale: all three participate, scored ----
+    // ---- musical chairs finale: 3 players → 2 elimination rounds ----
+    const totalsBefore = new Map([...room.totals].map(([id, t]) => [id, Math.round(t)]));
     room.hostNext();
-    await waitFor(() => room.phase === 'redemption', 3000, 'chairs finale');
-    assert.equal(room.redemption.participants.length, 3, 'everyone plays the finale');
-    assert.equal(room.redemption.mode, 'scored');
+    await waitFor(() => room.phase === 'redemption', 3000, 'chairs round 1');
+    assert.equal(room.redemption.participants.length, 3, 'everyone starts the finale');
+    assert.equal(room.redemption.mode, 'chairs');
+    assert.equal(room.chairs.totalRounds, 2, 'rounds = players − 1');
+    assert.equal(room.chairs.round, 1);
 
-    await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go');
+    // Round 1: p3 is slowest → eliminated, 2 chairs at stake.
+    await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go 1');
     room.handleRedemptionReport('p1', { status: 'ok', rawMs: 200, earlyPresses: 0 });
     room.handleRedemptionReport('p2', { status: 'ok', rawMs: 300, earlyPresses: 0 });
     room.handleRedemptionReport('p3', { status: 'ok', rawMs: 400, earlyPresses: 0 });
+    await waitFor(() => room.phase === 'chairs_result', 3000, 'round 1 result');
+    assert.deepEqual(room.chairs.eliminated, ['p3'], 'slowest player is out first');
+    assert.deepEqual([...room.chairs.active].sort(), ['p1', 'p2'], 'survivors keep chairs');
 
+    // Round 2 (final): p2 slowest → p1 takes the last chair.
+    room.hostNext();
+    await waitFor(() => room.phase === 'redemption' && room.chairs.round === 2, 3000, 'chairs round 2');
+    assert.equal(room.redemption.participants.length, 2, 'eliminated players sit out');
+    await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go 2');
+    room.handleRedemptionReport('p1', { status: 'ok', rawMs: 210, earlyPresses: 0 });
+    room.handleRedemptionReport('p2', { status: 'ok', rawMs: 320, earlyPresses: 0 });
+    await waitFor(() => room.phase === 'chairs_result', 3000, 'final round result');
+
+    // Bonus scoring: 3× by placement — 1st 3000, 2nd 1500, 3rd 0.
+    room.hostNext();
     await waitFor(() => room.phase === 'winner', 3000, 'winner');
     const standings = room.finalStandings;
-    assert.equal(standings.length, 3, 'all players in final standings — nobody eliminated');
+    assert.equal(standings.length, 3, 'all players in final standings');
     for (let i = 1; i < standings.length; i++) {
       assert.ok(standings[i - 1].total >= standings[i].total, 'standings sorted by total');
     }
     assert.equal(room.winnerId, standings[0].id);
-    // p1: 1000 + something + 1000 (fastest reaction) — must beat p3 who sat
-    // out game 1 (0 pts) and was slowest in the finale.
-    assert.ok(standings.findIndex((s) => s.id === 'p1') <
-              standings.findIndex((s) => s.id === 'p3'));
+    const totalOf = (id) => standings.find((s) => s.id === id).total;
+    assert.equal(totalOf('p1'), totalsBefore.get('p1') + 3000, 'tournament winner banks 3000 (3×)');
+    assert.equal(totalOf('p2'), totalsBefore.get('p2') + 1500, '2nd of 3 banks 1500');
+    assert.equal(totalOf('p3'), totalsBefore.get('p3') + 0, 'first out banks 0');
   } finally {
     room.destroy();
   }
 });
 
-test('finale with no clean presses: chairs scores 0 for all, prior totals decide', async () => {
+test('2-player finale: one round, placement bonus (3000 / 0) can flip the lead', async () => {
   const room = new Room(stubIo(), 'TESB', {
     ...FAST,
     enabled: onlyGames('stopclock'),
@@ -134,12 +153,21 @@ test('finale with no clean presses: chairs scores 0 for all, prior totals decide
     await waitFor(() => room.phase === 'scores', 3000, 'scores');
     room.hostNext();
     await waitFor(() => room.phase === 'redemption', 3000, 'finale');
+    assert.equal(room.chairs.totalRounds, 1, '2 players → a single round');
     await waitFor(() => room.redemption && room.redemption.tGreen, 3000, 'go');
+    // Anna mashes into the hard timeout (999999); Ben merely freezes on
+    // green (10000) — Ben is less slow, takes the only chair, and the 3×
+    // placement bonus overturns Anna's minigame lead.
     room.handleRedemptionReport('a', { status: 'hardTimeout', rawMs: null, earlyPresses: 40 });
     room.handleRedemptionReport('b', { status: 'postGreenTimeout', rawMs: null, earlyPresses: 0 });
+    await waitFor(() => room.phase === 'chairs_result', 3000, 'result');
+    assert.equal(room.chairs.eliminated[0], 'a');
+    room.hostNext();
     await waitFor(() => room.phase === 'winner', 3000, 'winner');
-    assert.equal(room.winnerId, 'a', 'game-1 leader wins when the finale scores nobody');
+    assert.equal(room.winnerId, 'b', 'last chair pays 3000 — bonus round flips the lead');
     assert.equal(room.finalStandings.length, 2);
+    assert.equal(room.finalStandings[0].total, 3000, 'Ben: 0 from games + 3000 bonus');
+    assert.equal(room.finalStandings[1].total, 1000, 'Anna: 1000 from games + 0 bonus');
   } finally {
     room.destroy();
   }

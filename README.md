@@ -40,9 +40,12 @@ Score attack — no elimination:
 4. After every game, each player sees their raw result, points earned,
    running total, and rank; a **live leaderboard strip** stays pinned to the
    top of every player screen and the host screen for the whole session.
-5. The finale is **musical chairs**: a clock-synced reaction test everyone
-   plays at once. Penalized reaction time is normalized 0–1000 like any
-   other game.
+5. The finale is **musical chairs** — a bonus elimination tournament of
+   clock-synced reaction rounds. With N players there are N−1 rounds; every
+   round shows one chair fewer than the players still in (players − 1), the
+   slowest reaction is eliminated, and everyone else's avatar visibly takes
+   a chair. Play continues until one player holds the last chair. Final
+   placement pays **3× bonus points** (1st = 3000 … last = 0, linear).
 6. Highest cumulative total wins.
 
 Round content is randomized **server-side** with a seeded RNG and broadcast

@@ -1,10 +1,11 @@
 // Host screen: room creation, lobby + QR, config panel, phase displays,
 // per-game leaderboards, the musical-chairs finale, winner.
-// Format: every player plays every enabled game once, then Musical Chairs;
-// highest cumulative score wins. No elimination.
+// Format: every player plays every enabled game once, then the Musical
+// Chairs bonus finale — (players − 1) elimination rounds, slowest out each
+// round, 3× points by final placement. Highest cumulative score wins.
 
 import { syncClock } from '/js/sync.js';
-import { startChairs } from '/js/chairs.js';
+import { startChairs, startChairsSeated } from '/js/chairs.js';
 import { startTutorialAnim } from '/js/tutorials.js';
 
 const socket = io();
@@ -210,6 +211,7 @@ socket.on('phase', (p) => {
     case 'test_done': renderTestDone(p); break;
     case 'scores': renderScores(p); break;
     case 'redemption': renderRedemption(p); break;
+    case 'chairs_result': renderChairsResult(p); break;
     case 'redemption_test_done': renderRedemptionTestDone(p); break;
     case 'winner': renderWinner(p); break;
   }
@@ -259,7 +261,7 @@ function renderMusic(p) {
     arena,
     el('p', { class: 'muted', style: 'font-size:20px' },
       p.chairs
-        ? 'When it stops: eyes on your own screen — press on green. Fastest reaction scores the most.'
+        ? 'BONUS ROUND — 3× points! One chair too few: the slowest reaction each round is OUT. Survive to the last chair.'
         : `When it stops: ${(p.gameNames || []).join('  +  ')}`)
   );
   const names = state.players.map((pl) => pl.name);
@@ -401,11 +403,15 @@ let redemptionAnim = null;
 
 function renderRedemption(p) {
   const arena = el('div', {});
+  const nPlayers = p.participantNames.length;
+  const chairCount = p.chairCount ?? Math.max(1, nPlayers - 1);
   content().replaceChildren(
-    el('h1', {}, '🪑 MUSICAL CHAIRS'),
+    el('h1', {}, p.round
+      ? `🪑 MUSICAL CHAIRS — ROUND ${p.round} of ${p.totalRounds}`
+      : '🪑 MUSICAL CHAIRS'),
     el('p', { style: 'font-size:22px' },
       p.scored
-        ? `${p.participantNames.join(' · ')} — fastest reaction scores the most points.`
+        ? `${nPlayers} players, ${chairCount} chair${chairCount === 1 ? '' : 's'} — the slowest reaction is OUT.`
         : `${p.participantNames.join(' · ')}`),
     arena,
     el('div', { class: 'light', id: 'host-light' }, 'WAIT…'),
@@ -413,8 +419,35 @@ function renderRedemption(p) {
   );
   redemptionAnim = startChairs(arena, {
     names: p.participantNames,
-    chairs: Math.max(1, p.participantNames.length - 1),
+    chairs: chairCount,
     size: 280,
+  });
+}
+
+// Round result: survivors' avatars drop into their chairs; the slowest
+// player walks off. Host advances to the next round (or the winner).
+let chairsResultAnim = null;
+function renderChairsResult(p) {
+  chairsResultAnim?.stop();
+  const arena = el('div', {});
+  const times = el('p', { class: 'muted' },
+    (p.results || []).map((r) => fmtRedRow(r)).join('   ·   '));
+  const ord = (n) => `${n}${['th', 'st', 'nd', 'rd'][((n % 100) - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th'}`;
+  content().replaceChildren(
+    el('h1', {}, `🪑 Round ${p.round} of ${p.totalRounds}`),
+    el('h2', {}, p.final
+      ? `👑 ${p.survivors?.[0]?.name || '?'} takes the last chair! ${p.eliminated.name} is out in ${ord(p.eliminated.place)}.`
+      : `💥 ${p.eliminated.name} was slowest — OUT in ${ord(p.eliminated.place)} place!`),
+    arena,
+    times,
+    el('p', { class: 'muted' }, p.final
+      ? 'Press Next ▸ for the 3× bonus points and the champion.'
+      : `Press Next ▸ — ${p.survivors.length} players, ${Math.max(1, p.survivors.length - 1)} chairs.`)
+  );
+  chairsResultAnim = startChairsSeated(arena, {
+    seated: (p.survivors || []).map((s) => s.name),
+    out: p.eliminated?.name || null,
+    size: 320,
   });
 }
 
@@ -444,9 +477,10 @@ function renderWinner(p) {
     el('div', { class: 'winner-name' }, p.winnerName || '—'),
   ];
   if (p.chairsBoard?.length) {
-    const box = el('div', { style: 'margin-top:10px' }, el('h2', {}, '🪑 Musical Chairs results'));
+    const box = el('div', { style: 'margin-top:10px' },
+      el('h2', {}, '🪑 Musical Chairs — 3× bonus by placement'));
     for (const r of p.chairsBoard) {
-      box.append(el('p', {}, `${fmtRedRow(r)} → +${r.points} pts`));
+      box.append(el('p', {}, `${r.place}. ${r.name} → +${r.points} pts`));
     }
     parts.push(box);
   }
