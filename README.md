@@ -2,7 +2,7 @@
 
 A hybrid-meeting party game: classic musical chairs with the scramble for a
 seat replaced by a **skill scramble**. One projected host screen, every player
-on their own phone or laptop. 3–30 players, ~20 minutes including rules.
+on their own phone or laptop. 2–30 players, ~20 minutes including rules.
 
 Every scoring round is played by **all surviving players simultaneously** —
 nothing is turn-based.

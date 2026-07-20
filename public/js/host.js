@@ -94,12 +94,6 @@ function buildConfigPanel() {
   const c = state.config;
   $('cfg-dur').value = Math.round(c.gameDuration / 1000);
   $('cfg-dur-val').textContent = Math.round(c.gameDuration / 1000);
-  $('cfg-tut').value = Math.round((c.tutorialMs ?? 9000) / 1000);
-  $('cfg-tut-val').textContent = Math.round((c.tutorialMs ?? 9000) / 1000);
-  $('cfg-pen').value = Math.round(c.earlyPressPenalty * 100);
-  $('cfg-pen-val').textContent = Math.round(c.earlyPressPenalty * 100);
-  $('cfg-sling').value = c.slingshotDistance;
-  $('cfg-sling-val').textContent = c.slingshotDistance;
   $('cfg-practice').checked = c.practice;
 
   const nameOf = (key) => (c.roster || []).find((g) => g.key === key)?.name || key;
@@ -124,9 +118,6 @@ function buildConfigPanel() {
   }
 
   $('cfg-dur').oninput = (e) => { $('cfg-dur-val').textContent = e.target.value; pushConfig({ gameDuration: Number(e.target.value) * 1000 }); };
-  $('cfg-tut').oninput = (e) => { $('cfg-tut-val').textContent = e.target.value; pushConfig({ tutorialMs: Number(e.target.value) * 1000 }); };
-  $('cfg-pen').oninput = (e) => { $('cfg-pen-val').textContent = e.target.value; pushConfig({ earlyPressPenalty: Number(e.target.value) / 100 }); };
-  $('cfg-sling').oninput = (e) => { $('cfg-sling-val').textContent = e.target.value; pushConfig({ slingshotDistance: Number(e.target.value) }); };
   $('cfg-practice').onchange = (e) => pushConfig({ practice: e.target.checked });
 }
 
