@@ -282,9 +282,9 @@ export class Room {
   }
 
   publicConfig() {
-    const { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled } = this.config;
+    const { gameDuration, practice, minDelay, maxDelay, enabled } = this.config;
     const roster = ROSTER.map(({ key, name, category }) => ({ key, name, category }));
-    return { gameDuration, tutorialMs, practice, minDelay, maxDelay, earlyPressPenalty, slingshotDistance, enabled, roster };
+    return { gameDuration, practice, minDelay, maxDelay, enabled, roster };
   }
 
   updateConfig(raw) {
