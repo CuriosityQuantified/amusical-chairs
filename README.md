@@ -67,6 +67,23 @@ normalization applies. Odd One Out, Bisect, and Stop the Clock are never
 sponsored. Ships with a fictional demo brand pack (`server/sponsors.js`) —
 real trademarks require a real sponsor deal.
 
+## Drop-in ads (optional)
+
+Google H5 Games Ads (the self-serve, no-sales-required network for browser
+games) is wired in but **off by default** — without configuration the client
+loads zero third-party code. To enable:
+
+1. Serve the game from a domain you own and get it approved for
+   [Google AdSense](https://adsense.google.com) (H5 Games Ads program).
+2. Set `ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX` in the server environment.
+   Set `ADSENSE_TEST=1` to serve test ads while unapproved.
+
+Interstitials are requested only from dead-time screens (score reveals
+between games, game over), never during timed input, never before the
+clock-synced finale, never in solo practice, and at most one per 3 minutes
+(`public/js/ads.js`). Sponsored rounds (above) are independent of this and
+ship with fictional brands.
+
 ## Anti-cheat details worth knowing
 
 - **Redemption mashing:** any press before green silently redraws the delay

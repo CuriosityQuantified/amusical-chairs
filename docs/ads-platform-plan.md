@@ -3,6 +3,41 @@
 How to fill the sponsored-round slots (`server/sponsors.js`) with real, paying
 sponsors. Research date: July 2026.
 
+## Decision: the drop-in path (no brand outreach)
+
+Constraint added after the research below: **no direct-sold deals of any
+kind** — monetization must be self-serve, drop-in, zero sales effort. That
+rules out Phases 1–2 as revenue (they assume selling sponsorships) and leads
+to a two-track conclusion:
+
+1. **Revenue: Google H5 Games Ads (Ad Placement API)** — *implemented,
+   config-gated.* It is the only major self-serve network that fills
+   mobile-browser games: sign up for AdSense, get approved, paste your
+   `ca-pub-…` id, done. No contracts, no sales, Google fills and pays.
+   Integration lives in `public/js/ads.js` + `/api/ads-config`; see the
+   README for setup. House rules baked in: interstitials are requested only
+   from dead-time screens (score reveals between games, game over), never
+   during timed input, never before the clock-synced finale, solo practice
+   stays ad-free, our own 3-minute frequency floor sits on top of Google's
+   pacing — and with no `ADSENSE_CLIENT` set, zero third-party code loads.
+2. **Sponsored rounds stay a feature, not a revenue channel.** No
+   programmatic network can fill data-shaped slots (a brand color, a typing
+   sentence, a grid icon) — that inventory only monetizes through direct
+   deals, which are off the table. The fictional demo pack remains as game
+   flavor, and the host-uploaded pack idea survives as the *self-sponsorship*
+   feature (companies branding their own event), which needs no outreach.
+
+The trade-offs accepted: interstitial ads are exactly the interruption format
+the sponsored-rounds design avoids — confined to dead time they're the
+industry-standard compromise, but they are a real step down in polish from
+Tier 1. AdSense approval requires serving from a domain you own (a bare
+`*.up.railway.app` URL generally won't be approved) and takes days–weeks.
+Revenue scales with traffic; at party-game session counts expect modest
+numbers — this is "the game pays for its hosting," not a business, unless
+play volume grows.
+
+The original phased analysis follows for the record.
+
 ## What our implementation actually requires
 
 The sponsored-rounds system imposes constraints most ad tech can't meet, so

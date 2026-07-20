@@ -7,6 +7,7 @@ import { GameClients } from '/js/games.js';
 import { startChairs } from '/js/chairs.js';
 import { startTutorialAnim } from '/js/tutorials.js';
 import { createRedemptionRun } from '/shared/redemption-core.js';
+import { initAds, adBreakAt } from '/js/ads.js';
 
 const socket = io();
 const $ = (id) => document.getElementById(id);
@@ -59,6 +60,9 @@ async function enterRoom(res, code) {
   $('screen-play').classList.remove('hidden');
   $('me-name').textContent = res.name;
   $('room-label').textContent = res.snapshot?.solo ? 'solo practice' : `room ${code}`;
+  // Drop-in ads (no-op unless the server has an AdSense client configured).
+  // Solo practice stays ad-free.
+  if (!res.snapshot?.solo) initAds();
   applySnapshot(res.snapshot);
   await doSync();
 }
@@ -309,6 +313,10 @@ function renderScores(p) {
     el('p', { class: 'muted' },
       p.nextIsChairs ? 'Next up: MUSICAL CHAIRS — the finale!' : 'Next game starts soon…')
   );
+  // Score reveal is the longest guaranteed dead time (host reads the board,
+  // then music + tutorial). Never before the finale — the chairs round needs
+  // an undisturbed clock re-sync.
+  if (!p.nextIsChairs) adBreakAt('between-games');
 }
 
 // ---- socket events ---------------------------------------------------------
@@ -508,4 +516,6 @@ function renderWinner(p) {
       `Musical Chairs: ${myChairs.status === 'ok' ? `${myChairs.rawMs} ms` : myChairs.status} → +${myChairs.points} pts`));
   }
   content().append(list);
+  // Game over — nothing left to protect.
+  adBreakAt('game-over');
 }
