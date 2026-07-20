@@ -392,11 +392,9 @@ socket.on('you:score', (s) => {
 
 // ---- musical chairs (reaction) ---------------------------------------------
 
-async function prepareRedemption(p) {
+function prepareRedemption(p) {
   clearAll();
   content().classList.add('hidden');
-  // Re-sync before the reaction round.
-  await doSync();
   const tz = $('tapzone');
   tz.classList.remove('hidden', 'green');
   $('tapzone-text').textContent = 'WAIT FOR GREEN';
@@ -410,6 +408,12 @@ async function prepareRedemption(p) {
   });
   tz.insertBefore(anim.canvas, $('tapzone-text'));
   state.redemption = { armed: false, anim };
+  // Re-sync the clock in the background before green is scheduled. This must
+  // not gate state.redemption: on a slow link the 10-sample sync can outlast
+  // the server's prep window, and the redemption:go arriving mid-sync would
+  // be dropped — the light would stay red forever. A stale offset from the
+  // previous sync is a far better fallback than never seeing green.
+  doSync();
 }
 
 socket.on('redemption:go', (p) => {
